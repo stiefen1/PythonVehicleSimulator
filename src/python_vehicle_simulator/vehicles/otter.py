@@ -43,6 +43,8 @@ import numpy as np
 import math
 from python_vehicle_simulator.lib.control import PIDpolePlacement
 from python_vehicle_simulator.lib.gnc import Smtrx, Hmtrx, Rzyx, m2c, crossFlowDrag, sat
+from python_vehicle_simulator.vehicles.vessel import IVessel
+from python_vehicle_simulator.states.states import Nu, Eta, States
 
 # Class Vehicle
 class otter:
@@ -58,12 +60,14 @@ class otter:
     """
 
     def __init__(
-        self, 
+        self,
         controlSystem="stepInput", 
         r = 0, 
         V_current = 0, 
         beta_current = 0,
-        tau_X = 120
+        tau_X = 120, 
+        nu:Nu=Nu(),
+        eta:Eta=Eta()
     ):
         
         # Constants
