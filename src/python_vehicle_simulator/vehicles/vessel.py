@@ -2,15 +2,15 @@ from abc import abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from python_vehicle_simulator.states.states import Eta, Nu
-from python_vehicle_simulator.utils.transformation import R_body_to_ned
+from python_vehicle_simulator.lib.gnc import Rzyx
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 
-# Coordinates in NED frame. Psi is clockwise positive
-#   \eta  = [N, E, \psi]  
+# Coordinates in NED frame. yaw is clockwise positive
+#   \eta  = [N, E, D, roll, pitch, yaw]  
 #   \nu = [u, v, r]
 #   x = [\eta, \nu]
 
@@ -72,7 +72,7 @@ class IVessel(IDrawable):
         return ax
     
     def get_geometry_from_pose(self, eta:Eta) -> np.ndarray:
-        return R_body_to_ned(*eta.rpy) @ self.initial_geometry + eta.to_numpy()[0:3]
+        return Rzyx(*eta.rpy) @ self.initial_geometry + eta.to_numpy()[0:3]
 
     @property
     def geometry(self) -> np.ndarray:

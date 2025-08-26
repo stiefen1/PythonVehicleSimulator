@@ -1,7 +1,6 @@
 import numpy as np
 from typing import List, Tuple
-from python_vehicle_simulator.utils.transformation import R_body_to_ned
-
+from python_vehicle_simulator.lib.gnc import Rzyx
 class Eta:
     def __init__(self, n:float=0.0, e:float=0.0, d:float=0.0, roll:float=0.0, pitch:float=0.0, yaw:float=0.0):
         """
@@ -17,9 +16,12 @@ class Eta:
 
     def to_list(self) -> List:
         return [self.n, self.e, self.d, self.roll, self.pitch, self.yaw]
+    
+    def __getitem__(self, idx:int) -> float:
+        return self.to_list()[idx]
 
     def to_numpy(self) -> np.ndarray:
-        return np.array(self.to_list()).reshape(6, 1)
+        return np.array(self.to_list(), float).reshape(6, 1)
     
     @property
     def rpy(self) -> Tuple[float, float, float]:
@@ -45,11 +47,14 @@ class Nu:
     def to_list(self) -> List:
         return [self.u, self.v, self.r, self.p, self.q, self.r]
 
+    def __getitem__(self, idx:int) -> float:
+        return self.to_list()[idx]
+
     def to_numpy(self) -> np.ndarray:
-        return np.array(self.to_list()).T
+        return np.array(self.to_list(), float).T
     
     def to_ned(self, roll:float, pitch:float, yaw:float) -> np.ndarray:
-        return (R_body_to_ned(roll, pitch, yaw) @ self.to_numpy()[0:3]).reshape(3, 1)
+        return (Rzyx(roll, pitch, yaw) @ self.to_numpy()[0:3]).reshape(3, 1)
 
     @property
     def uvw(self) -> Tuple[float, float, float]:
@@ -66,9 +71,12 @@ class States:
 
     def to_list(self) -> List[float]:
         return self.eta.to_list() + self.nu.to_list()
+    
+    def __getitem__(self, idx:int) -> float:
+        return self.to_list()[idx]
 
     def to_numpy(self) -> np.ndarray:
-        return np.array(self.to_list()).reshape(12, 1)
+        return np.array(self.to_list(), float).reshape(12, 1)
     
 def test():
     eta = Eta(n=30, e=10, yaw=1.5)
