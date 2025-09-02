@@ -49,7 +49,8 @@ import numpy as np
 import math
 import sys
 from python_vehicle_simulator.lib.control import integralSMC
-from python_vehicle_simulator.lib.gnc import crossFlowDrag,forceLiftDrag,Hmtrx,m2c,gvect,ssa
+from python_vehicle_simulator.lib.physics import crossFlowDrag, forceLiftDrag, m2c, gvect
+from python_vehicle_simulator.utils.math_fn import Hmtrx, ssa
 
 # Class Vehicle
 class remus100:
@@ -81,7 +82,7 @@ class remus100:
         # Constants
         self.D2R = math.pi / 180        # deg2rad
         self.rho = 1026                 # density of water (kg/m^3)
-        g = 9.81                        # acceleration of gravity (m/s^2)
+        GRAVITY = 9.81                        # acceleration of gravity (m/s^2)
         
         if controlSystem == "depthHeadingAutopilot":
             self.controlDescription = (
@@ -157,7 +158,7 @@ class remus100:
         self.MRB = H_rg.T @ MRB_CG @ H_rg           # MRB expressed in the CO
 
         # Weight and buoyancy
-        self.W = m * g
+        self.W = m * GRAVITY
         self.B = self.W
         
         # Added moment of inertia in roll: A44 = r44 * Ix
@@ -353,7 +354,7 @@ class remus100:
         tau_crossflow = crossFlowDrag(self.L,self.diam,self.diam,nu_r)
 
         # Restoring forces and moments
-        g = gvect(self.W,self.B,eta[4],eta[3],self.r_bg,self.r_bb)
+        GRAVITY = gvect(self.W,self.B,eta[4],eta[3],self.r_bg,self.r_bb)
         
         # Horizontal- and vertical-plane relative speed
         U_rh = math.sqrt( nu_r[0]**2 + nu_r[1]**2 )
@@ -380,7 +381,7 @@ class remus100:
             ], float)
     
         # AUV dynamics
-        tau_sum = tau + tau_liftdrag + tau_crossflow - np.matmul(C+D,nu_r)  - g
+        tau_sum = tau + tau_liftdrag + tau_crossflow - np.matmul(C+D,nu_r)  - GRAVITY
         nu_dot = Dnu_c + np.matmul(self.Minv, tau_sum)
             
         # Actuator dynamics

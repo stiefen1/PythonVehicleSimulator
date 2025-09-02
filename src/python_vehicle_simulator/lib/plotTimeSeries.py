@@ -12,7 +12,7 @@ Author:     Thor I. Fossen
 import math
 import matplotlib.pyplot as plt
 import numpy as np
-from python_vehicle_simulator.lib.gnc import ssa
+from python_vehicle_simulator.utils.math_fn import ssa
 import mpl_toolkits.mplot3d.axes3d as p3
 import matplotlib.animation as animation
 

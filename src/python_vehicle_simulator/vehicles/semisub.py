@@ -47,7 +47,7 @@ Author:     Thor I. Fossen
 import numpy as np
 import math
 from python_vehicle_simulator.lib.control import DPpolePlacement
-from python_vehicle_simulator.lib.gnc import sat, ssa
+from python_vehicle_simulator.utils.math_fn import sat, ssa
 
 # Class Vehicle
 class semisub:
@@ -153,7 +153,7 @@ class semisub:
             float,
         )
 
-        self.G = 1.0e10 * np.diag([0.0, 0.0, 0.0006, 1.4296, 2.6212, 0.0])
+        self.GRAVITY = 1.0e10 * np.diag([0.0, 0.0, 0.0006, 1.4296, 2.6212, 0.0])
 
         self.M = MRB + MA
 
@@ -206,7 +206,7 @@ class semisub:
 
         # 6-DOF semisub model
         nu_dot = np.matmul(
-            self.Minv, tau - np.matmul(self.D, nu_r) - np.matmul(self.G, eta)
+            self.Minv, tau - np.matmul(self.D, nu_r) - np.matmul(self.GRAVITY, eta)
         )
         n_dot = (u_control - u_actual) / self.T_n
 

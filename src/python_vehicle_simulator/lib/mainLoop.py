@@ -7,7 +7,7 @@ Author:     Thor I. Fossen
 """
 
 import numpy as np
-from .gnc import attitudeEuler
+from python_vehicle_simulator.lib.integrator import Euler
 
 ###############################################################################
 # Function printSimInfo(vehicle)
@@ -58,7 +58,7 @@ def printVehicleinfo(vehicle, sampleTime, N):
 ###############################################################################
 # Function simulate(N, sampleTime, vehicle)
 ###############################################################################
-def simulate(N, sampleTime, vehicle):
+def simulate_old(N, sampleTime, vehicle):
     
     DOF = 6                     # degrees of freedom
     t = 0                       # initial simulation time
@@ -100,3 +100,4 @@ def simulate(N, sampleTime, vehicle):
     simTime = np.arange(start=0, stop=t+sampleTime, step=sampleTime)[:, None]
 
     return(simTime,simData)
+

@@ -15,8 +15,8 @@ import sys
 import webbrowser
 import matplotlib.pyplot as plt
 from python_vehicle_simulator.vehicles import (
-    DSRV, frigate, otter, ROVzefakkel, semisub, shipClarke83, supply, tanker, 
-    remus100, torpedo
+    DSRV, frigate, ROVzefakkel, semisub, shipClarke83, supply, tanker, 
+    remus100, torpedo, Otter
 )
 from python_vehicle_simulator.lib import (
     printSimInfo, printVehicleinfo, simulate, plotVehicleStates, plotControls, 
@@ -47,7 +47,7 @@ Vehicle constructors:
   remus100('depthHeadingAutopilot', z_d, psi_d, V_c, beta_c)             
   torpedo('depthHeadingAutopilot', z_d, psi_d, V_c, beta_c)             
 
-Call constructors without arguments to test step inputs, e.g. DSRV(), otter(), etc.
+Call constructors without arguments to test step inputs, e.GRAVITY. DSRV(), otter(), etc.
 """
 
 ### Main program ###
@@ -59,7 +59,7 @@ def main():
     vehicleOptions = {
         '1': lambda: DSRV('depthAutopilot', 60.0),
         '2': lambda: frigate('headingAutopilot', 10.0, 100.0),
-        '3': lambda: otter('headingAutopilot', 100.0, 0.3, -30.0, 200.0),
+        # '3': lambda: otter('headingAutopilot', 100.0, 0.3, -30.0, 200.0),
         '4': lambda: ROVzefakkel('headingAutopilot', 3.0, 100.0),
         '5': lambda: semisub('DPcontrol', 10.0, 10.0, 40.0, 0.5, 190.0),
         '6': lambda: shipClarke83('headingAutopilot', -20.0, 70, 8, 6, 0.7, 0.5, 10.0, 1e5),
@@ -90,6 +90,11 @@ def main():
     
     plt.show()
     plt.close()
+
+def main_otter() -> None:
+    otter = Otter(
+        
+    )
 
 if __name__ == "__main__":
     main()

@@ -1,11 +1,18 @@
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
 from python_vehicle_simulator.visualizer.drawable import IDrawable
+from python_vehicle_simulator.lib import IGuidance, Guidance, INavigation, Navigation, IControl, Control
+from python_vehicle_simulator.lib.integrator import Euler
 from python_vehicle_simulator.states.states import Eta, Nu
-from python_vehicle_simulator.lib.gnc import Rzyx
+from python_vehicle_simulator.utils.math_fn import Rzyx, Tzyx
+from python_vehicle_simulator.lib.weather import Wind, Current
+from python_vehicle_simulator.lib.obstacle import Obstacle
+from python_vehicle_simulator.lib.actuator import IActuator
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
 
 
 
@@ -26,22 +33,79 @@ VESSEL_GEOMETRY = lambda loa, beam: np.array([
 class IVessel(IDrawable):
     def __init__(
             self,
-            loa:float,
-            beam:float,
-            eta:Eta,
-            nu:Nu,
+            params,
+            dt,
             *args,
+            eta:Eta=None,
+            nu:Nu=None,
+            guidance:IGuidance=None,
+            navigation:INavigation=None,
+            control:IControl=None,
+            actuators:List[IActuator]=None,
+            name:str='IVessel',
+            mmsi:str=None, # Maritime Mobile Service Identity number
             **kwargs
     ):
-        self.loa = loa,
-        self.beam = beam
-        self.eta = eta
-        self.nu = nu
-        self.initial_geometry = VESSEL_GEOMETRY(loa, beam)
+        self.params = params
+        self.dt = dt
+        self.eta = eta or Eta()
+        self.nu = nu or Nu()
+        self.guidance = guidance or Guidance()
+        self.navigation = navigation or Navigation()
+        self.control = control or Control()
+        self.actuators = actuators or []
+        self.initial_geometry = VESSEL_GEOMETRY(self.params.loa, self.params.beam)
+        self.name = name
+        self.mmsi = mmsi
 
     @abstractmethod
-    def __dynamics__(self, *args, **kwargs) -> Tuple[Eta, Nu]:
+    def __dynamics__(self, tau_actuators:np.ndarray, current:Current, wind:Wind, *args, **kwargs) -> np.ndarray:
         pass
+
+    def step(self, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List["IVessel"], *args, **kwargs) -> Tuple[List, float, bool, bool, Dict, bool]:
+        """
+        One step forward in time. Returns a tuple containing
+
+        - observation
+        - reward
+        - terminated
+        - truncated
+        - info
+        - done
+
+        Not useful yet, but will be for later integration with Gymnasium
+        """
+        # GNC
+        ## Navigation: measure environments
+        obs = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
+        ## Guidance: Get desired states
+        eta_des, nu_des = self.guidance(*obs)
+        ## Control: Generate action to track desired states
+        actions = self.control(eta_des, nu_des, *obs)
+
+        # Actuators
+        tau_actuators = np.zeros((6,), float)
+        for actuator, action in zip(self.actuators, actions):
+            tau_actuators = tau_actuators + actuator.dynamics(action, self.nu.to_numpy(), current, self.dt)
+        # print("tau_a: ", tau_actuators)
+
+        # USV Dynamics
+        nu_dot = self.__dynamics__(tau_actuators, current, wind, *args, **kwargs)
+
+        # Forward Euler integration of nu
+        nu = Euler(self.nu.to_numpy(), nu_dot, self.dt)
+
+        # Forward Euler integration of eta
+        eta_dot = self.eta_dot(nu)
+        eta = Euler(self.eta.to_numpy(), eta_dot, self.dt)
+        
+        self.eta, self.nu = Eta(*eta), Nu(*nu)
+        return (obs, 0, False, False, {}, False)
+
+    def eta_dot(self, nu:np.ndarray):
+        p_dot   = np.matmul( Rzyx(*self.eta.to_list()[3:6]), nu[0:3] ) 
+        v_dot   = np.matmul( Tzyx(*self.eta.to_list()[3:5]), nu[3:6] )
+        return np.concatenate([p_dot, v_dot])
 
     def __plot__(self, ax, *args, **kwargs):
         """
@@ -50,52 +114,67 @@ class IVessel(IDrawable):
         z = -depth
         """
         if isinstance(ax, Axes3D):
-            ax.plot3D(self.geometry[1, :], self.geometry[0, :], -self.geometry[2, :], *args, **kwargs)
+            ax.plot3D(*self.geometry_for_3D_plot, *args, **kwargs)
         else:
-            ax.plot(self.geometry[1, :], self.geometry[0, :], *args, **kwargs)
+            ax.plot(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
 
     def __scatter__(self, ax, *args, **kwargs):
         if isinstance(ax, Axes3D):
-            ax.scatter3D(self.geometry[1, :], self.geometry[0, :], -self.geometry[2, :], *args, **kwargs)
+            ax.scatter3D(*self.geometry_for_3D_plot, *args, **kwargs)
         else:
-            ax.scatter(self.geometry[1, :], self.geometry[0, :], *args, **kwargs)
+            ax.scatter(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
 
     def __fill__(self, ax, *args, **kwargs):
         if isinstance(ax, Axes3D):
-            verts = [list(zip(self.geometry[1, :], self.geometry[0, :], -self.geometry[2, :]))]
+            verts = [list(zip(*self.geometry_for_3D_plot))]
             poly = Poly3DCollection(verts, *args, **kwargs)
             ax.add_collection3d(poly)
         else:
-            ax.fill(self.geometry[1, :], self.geometry[0, :], *args, **kwargs)
+            ax.fill(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
     
     def get_geometry_from_pose(self, eta:Eta) -> np.ndarray:
-        return Rzyx(*eta.rpy) @ self.initial_geometry + eta.to_numpy()[0:3]
-
+        return Rzyx(*eta.rpy) @ self.initial_geometry + eta.to_numpy()[0:3].reshape(3, 1)
+    
     @property
     def geometry(self) -> np.ndarray:
         return self.get_geometry_from_pose(self.eta)
     
+    @property
+    def geometry_for_3D_plot(self) -> list[np.ndarray, np.ndarray]:
+        return self.geometry[1, :], self.geometry[0, :], -self.geometry[2, :]
+    
+    @property
+    def geometry_for_2D_plot(self) -> list[np.ndarray, np.ndarray]:
+        return self.geometry_for_3D_plot[0:2]
+    
+@dataclass
+class TestVesselParams:
+    loa:float=10
+    beam:float=3
+
+
 class TestVessel(IVessel):
     def __init__(
             self,
-            loa:float,
-            beam:float,
+            params,
+            dt,
             eta:Eta,
             nu:Nu,
             *args,
             **kwargs
     ):
-        super().__init__(loa=loa, beam=beam, eta=eta, nu=nu, *args, **kwargs)
+        super().__init__(params=params, dt=None, eta=eta, nu=nu, *args, **kwargs)
 
     def __dynamics__(self, *args, **kwargs):
         return super().__dynamics__(*args, **kwargs)
 
 def show_2D_vessel() -> None:
     import matplotlib.pyplot as plt
-    vessel = TestVessel(10, 3, Eta(n=5, e=10, roll=0.5, pitch=0.5, yaw=1.2), Nu(u=1, v=0.1, r=0.0))
+    params = TestVesselParams()
+    vessel = TestVessel(params, None, Eta(n=5, e=10, roll=0.5, pitch=0.5, yaw=1.2), Nu(u=1, v=0.1, r=0.0))
     ax = vessel.fill(c='blue')
     vessel.plot(ax=ax, c='red')
     vessel.scatter(ax=ax, c='black')
@@ -112,7 +191,8 @@ def interactive_3D_vessel() -> None:
     # Initial vessel state
     eta = Eta(n=0, e=0, d=0, roll=0, pitch=0, yaw=0)
     nu = Nu(u=0, v=0, w=0, p=0, q=0, r=0)
-    vessel = TestVessel(10, 3, eta, nu)
+    params = TestVesselParams()
+    vessel = TestVessel(params, None, eta, nu)
 
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1, projection='3d')

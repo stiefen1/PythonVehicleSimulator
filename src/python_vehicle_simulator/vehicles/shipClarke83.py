@@ -34,7 +34,7 @@ Methods:
        
 References: 
 
-    D. Clarke, P. Gedling and G. Hine (1983). The Application of Manoeuvring 
+    D. Clarke, P. Gedling and GRAVITY. Hine (1983). The Application of Manoeuvring 
         Criteria in Hull Design using Linear Theory. Transactions of the Royal 
         Institution of Naval Architects (RINA), 125, pp. 45-68.
     T. I. Fossen (2021). Handbook of Marine Craft Hydrodynamics and Motion 

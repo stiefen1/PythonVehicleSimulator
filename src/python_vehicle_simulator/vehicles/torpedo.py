@@ -58,7 +58,8 @@ import numpy as np
 import math
 import sys
 from python_vehicle_simulator.lib.control import integralSMC
-from python_vehicle_simulator.lib.gnc import crossFlowDrag,forceLiftDrag,Hmtrx,m2c,gvect,ssa
+from python_vehicle_simulator.lib.physics import crossFlowDrag, forceLiftDrag, m2c, gvect
+from python_vehicle_simulator.utils.math_fn import Hmtrx, ssa
 from python_vehicle_simulator.lib.actuator import fin, thruster
 
 # Class Vehicle
@@ -91,7 +92,7 @@ class torpedo:
         # Constants
         self.D2R = math.pi / 180        # deg2rad
         self.rho = 1026                 # density of water (kg/m^3)
-        g = 9.81                        # acceleration of gravity (m/s^2)
+        GRAVITY = 9.81                        # acceleration of gravity (m/s^2)
         
         if controlSystem == "depthHeadingAutopilot":
             self.controlDescription = (
@@ -162,7 +163,7 @@ class torpedo:
         self.MRB = H_rg.T @ MRB_CG @ H_rg           # MRB expressed in the CO
 
         # Weight and buoyancy
-        self.W = m * g
+        self.W = m * GRAVITY
         self.B = self.W
         
         # Added moment of inertia in roll: A44 = r44 * Ix
@@ -298,7 +299,7 @@ class torpedo:
         tau_crossflow = crossFlowDrag(self.L,self.diam,self.diam,nu_r)
 
         # Restoring forces and moments
-        g = gvect(self.W,self.B,eta[4],eta[3],self.r_bg,self.r_bb)
+        GRAVITY = gvect(self.W,self.B,eta[4],eta[3],self.r_bg,self.r_bb)
         
         # General force vector
         tau = np.zeros(6,float)
@@ -307,7 +308,7 @@ class torpedo:
             u_actual[i] = self.actuators[i].actuate(sampleTime, u_control[i]) # Actuator Dynamics
 
         # AUV dynamics
-        tau_sum = tau + tau_liftdrag + tau_crossflow - np.matmul(C+D,nu_r)  - g
+        tau_sum = tau + tau_liftdrag + tau_crossflow - np.matmul(C+D,nu_r)  - GRAVITY
         nu_dot = Dnu_c + np.matmul(self.Minv, tau_sum)
             
 

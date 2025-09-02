@@ -1,4 +1,89 @@
 import numpy as np
+from abc import ABC, abstractmethod
+from typing import Any, Tuple
+from python_vehicle_simulator.lib.weather import Current
+
+"""
+^ surge (x)
+|
+|
+O -----> sway (y)
+
+"""
+
+
+class IActuator(ABC):
+    def __init__(
+            self,
+            xy:Tuple,               # surge, sway in body frame
+            orientation:float,      # clockwise angle (rad) w.r.t surge 
+            u_0:Tuple,              # initial input value
+            u_min:Tuple,            # min input value
+            u_max:Tuple,            # max input value
+            *args,
+            time_const:Tuple=None,  # Time constant
+            f_min:Tuple=None,       # min force
+            f_max:Tuple=None,       # max force
+            **kwargs
+
+    ):
+        self.xy = np.array(xy)
+        self.u_0 = np.array(u_0) # initial command
+        self.u_min = np.array(u_min)
+        self.u_max = np.array(u_max)
+        self.dim = len(u_0)
+        self.time_const = np.array(time_const) or np.array(self.dim * [float('inf')])
+        self.u_prev = np.array(u_0)
+        self.f_min = np.array(f_min)
+        self.f_max = np.array(f_max)
+
+
+    def dynamics(self, u:np.ndarray, nu:np.ndarray, current:Current, dt:float, *args, **kwargs) -> np.ndarray:
+        """
+            Wrapper for __dynamics__. Add saturation to actuator input commands
+        """
+        u_dot = (u-self.u_prev) / self.time_const
+        u = np.clip(self.u_prev + u_dot * dt, self.u_min, self.u_max) # clip input within min/max bounds
+        tau = self.__dynamics__(u, nu, current, *args, **kwargs)
+        self.u_prev = u
+        return tau
+
+    @abstractmethod
+    def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
+        """
+            Input:      u (np.ndarray) - For example propeller speed
+            Output:     f (np.ndarray) - Generalized force (fx, fy, fz, Mx, My, Mz)
+        """
+        return np.zeros((6,))   
+
+class Thruster(IActuator):
+    def __init__(
+            self,
+            xy:Tuple,
+            k_pos:float,    # speed-thrust quad. mapping > 0 (n>=0)
+            k_neg:float,    # speed-thrust quad. mapping > 0 (n<0)
+            n_min:float,    # Min propeller speed (can be negative)
+            n_max:float,    # Max propeller speed
+            *args,
+            n_0:float=0.0,  # initial propeller speed (rad/s)
+            T_n:float=0.0,  # Time constant
+            f_max:float=float('inf'),
+            f_min:float=-float('inf'),
+            orientation:float=0.0,
+            **kwargs
+    ):
+        super().__init__(xy=xy, orientation=orientation, u_0=(n_0,), u_min=(n_min,), u_max=(n_max,), *args, time_const=(T_n,), f_min=(f_min,), f_max=(f_max,), **kwargs)
+        self.k_pos = k_pos
+        self.k_neg = k_neg
+
+    def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
+        f = np.clip(self.k_pos * u[0]**2 if u[0]>=0 else -self.k_neg * u[0]**2, self.f_min, self.f_max)
+        return np.array([1, 0, 0, 0, 0, self.xy[1]]) * f
+    
+    def Ti(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
+        
+        return 
+            
 
 class fin:
     '''

@@ -11,25 +11,39 @@ Author:     Thor I. Fossen
 """
 
 import numpy as np
-import math
+from abc import ABC, abstractmethod
+from python_vehicle_simulator.lib.weather import Current, Wind
+from python_vehicle_simulator.lib.obstacle import Obstacle
+from typing import Tuple, List
 
-# [x_d,v_d,a_d] = refModel3(x_d,v_d,a_d,r,wn_d,zeta_d,v_max,sampleTime) is a 3-order 
-# reference  model for generation of a smooth desired position x_d, velocity |v_d| < v_max, 
-# and acceleration a_d. Inputs are natural frequency wn_d and relative damping zeta_d.
-def refModel3(x_d, v_d, a_d, r, wn_d, zeta_d, v_max, sampleTime):
-    
-    # desired "jerk"
-    j_d = wn_d**3 * (r -x_d) - (2*zeta_d+1) * wn_d**2 * v_d - (2*zeta_d+1) * wn_d * a_d
+class IGuidance(ABC):
+    def __init__(
+            self,
+            *args,
+            **kwargs
+    ):
+        pass
 
-   # Forward Euler integration
-    x_d += sampleTime * v_d             # desired position
-    v_d += sampleTime * a_d             # desired velocity
-    a_d += sampleTime * j_d             # desired acceleration 
-    
-    # Velocity saturation
-    if (v_d > v_max):
-        v_d = v_max
-    elif (v_d < -v_max): 
-        v_d = -v_max    
-    
-    return x_d, v_d, a_d
+    def __call__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        return self.__get__(eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+
+    @abstractmethod
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        return eta, nu
+
+class Guidance(IGuidance):
+    def __init__(
+            self,
+            *args,
+            desired_heading:float=0.0,
+            desired_speed:float=1.0,
+            **kwargs
+    ):
+        self.desired_heading = desired_heading
+        self.desired_speed = desired_speed
+        super().__init__(*args, **kwargs)
+
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+        return np.array([0, 0, 0, 0, 0, self.desired_heading], float), np.array([self.desired_speed, 0, 0, 0, 0, 0], float)
+
+

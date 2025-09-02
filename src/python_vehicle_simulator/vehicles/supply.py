@@ -49,7 +49,7 @@ Author:     Thor I. Fossen
 import numpy as np
 import math
 from python_vehicle_simulator.lib.control import DPpolePlacement
-from python_vehicle_simulator.lib.gnc import sat
+from python_vehicle_simulator.utils.math_fn import sat
 
 # Class Vehicle
 class supply:
@@ -77,7 +77,7 @@ class supply:
         
         # Constants
         D2R = math.pi / 180     # deg2rad
-        g = 9.81                # acceleration of gravity (m/s^2)
+        GRAVITY = 9.81                # acceleration of gravity (m/s^2)
 
         if controlSystem == "DPcontrol":
             self.controlDescription = (
@@ -147,7 +147,7 @@ class supply:
 
         self.M3 = m * Tbis_inv @ Mbis @ Tbis_inv
         self.M3inv = np.linalg.inv(self.M3)
-        self.D3 = m * math.sqrt(g / self.L) * Tbis_inv @ Dbis @ Tbis_inv
+        self.D3 = m * math.sqrt(GRAVITY / self.L) * Tbis_inv @ Dbis @ Tbis_inv
 
         # DP control system
         self.e_int = np.array([0, 0, 0], float)  # integral states
