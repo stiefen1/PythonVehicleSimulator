@@ -33,6 +33,10 @@ class IControl(ABC):
     @abstractmethod
     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
         return []
+    
+    @abstractmethod
+    def reset(self):
+        pass
 
 class Control(IControl):
     def __init__(
@@ -44,6 +48,9 @@ class Control(IControl):
 
     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
         return super().__get__(eta_des, nu_des, eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+
+    def reset(self):
+        pass
 
 class HeadingAutopilotTwoThrusters(IControl):
     def __init__(
@@ -82,6 +89,14 @@ class HeadingAutopilotTwoThrusters(IControl):
         u = self.controlAllocation(tau_x, tau_n)
         # print(u)
         return u
+    
+    def reset(self):
+        self.psi_d = 0.0
+        self.r_d = 0.0
+        self.a_d = 0.0
+        self.e_int = 0.0
+        for actuator in self.actuators:
+            actuator.reset()
 
     def headingAutopilot(self, eta:np.ndarray, nu:np.ndarray, psi_setpoint:float):
         """

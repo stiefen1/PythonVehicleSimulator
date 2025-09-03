@@ -23,6 +23,9 @@ class Eta:
     def to_numpy(self) -> np.ndarray:
         return np.array(self.to_list(), float)
     
+    def zeros_inplace(self) -> None:
+        self = Eta()
+    
     @property
     def rpy(self) -> Tuple[float, float, float]:
         return (self.roll, self.pitch, self.yaw)
@@ -30,6 +33,11 @@ class Eta:
     @property
     def ned(self) -> Tuple[float, float, float]:
         return (self.n, self.e, self.d)
+    
+    @property
+    def neyaw(self) -> Tuple[float, float, float]:
+        return (self.n, self.e, self.yaw)
+
 
 class Nu:
     def __init__(self, u:float=0.0, v:float=0.0, w:float=0.0, p:float=0.0, q:float=0.0, r:float=0.0):
@@ -55,6 +63,9 @@ class Nu:
     
     def to_ned(self, roll:float, pitch:float, yaw:float) -> np.ndarray:
         return (Rzyx(roll, pitch, yaw) @ self.to_numpy()[0:3])
+    
+    def zeros_inplace(self) -> None:
+        self = Nu()
 
     @property
     def uvw(self) -> Tuple[float, float, float]:
@@ -63,6 +74,10 @@ class Nu:
     @property
     def pqr(self) -> Tuple[float, float, float]:
         return (self.p, self.q, self.r)
+
+    @property
+    def uvr(self) -> Tuple[float, float, float]:
+        return (self.u, self.v, self.r)
 
 class States:
     def __init__(self, eta:Eta, nu:Nu):

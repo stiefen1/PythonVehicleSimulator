@@ -12,6 +12,7 @@ from python_vehicle_simulator.lib.actuator import IActuator
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from copy import deepcopy
 
 
 
@@ -50,6 +51,8 @@ class IVessel(IDrawable):
         self.dt = dt
         self.eta = eta or Eta()
         self.nu = nu or Nu()
+        self._eta_0 = deepcopy(self.eta)
+        self._nu_0 = deepcopy(self.nu)
         self.guidance = guidance or Guidance()
         self.navigation = navigation or Navigation()
         self.control = control or Control()
@@ -62,7 +65,7 @@ class IVessel(IDrawable):
     def __dynamics__(self, tau_actuators:np.ndarray, current:Current, wind:Wind, *args, **kwargs) -> np.ndarray:
         pass
 
-    def step(self, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List["IVessel"], *args, **kwargs) -> Tuple[List, float, bool, bool, Dict, bool]:
+    def step(self, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List["IVessel"], *args, control_commands=None, **kwargs) -> Tuple[List, float, bool, bool, Dict, bool]:
         """
         One step forward in time. Returns a tuple containing
 
@@ -78,15 +81,18 @@ class IVessel(IDrawable):
         # GNC
         ## Navigation: measure environments
         obs = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
-        ## Guidance: Get desired states
-        eta_des, nu_des = self.guidance(*obs)
-        ## Control: Generate action to track desired states
-        actions = self.control(eta_des, nu_des, *obs)
+
+        # control_commands can be devised by an RL agent for example.
+        if control_commands is None:
+            ## Guidance: Get desired states
+            eta_des, nu_des = self.guidance(*obs)
+            ## Control: Generate action to track desired states
+            control_commands = self.control(eta_des, nu_des, *obs)
 
         # Actuators
         tau_actuators = np.zeros((6,), float)
-        for actuator, action in zip(self.actuators, actions):
-            tau_actuators = tau_actuators + actuator.dynamics(action, self.nu.to_numpy(), current, self.dt)
+        for actuator, control_command in zip(self.actuators, control_commands):
+            tau_actuators = tau_actuators + actuator.dynamics(control_command, self.nu.to_numpy(), current, self.dt)
         # print("tau_a: ", tau_actuators)
 
         # USV Dynamics
@@ -101,6 +107,16 @@ class IVessel(IDrawable):
         
         self.eta, self.nu = Eta(*eta), Nu(*nu)
         return (obs, 0, False, False, {}, False)
+    
+    def reset(self):
+        for actuator in self.actuators:
+            actuator.reset()
+
+        self.guidance.reset()
+        self.navigation.reset()
+        self.control.reset()
+        self.eta = deepcopy(self._eta_0)
+        self.nu = deepcopy(self._nu_0)
 
     def eta_dot(self, nu:np.ndarray):
         p_dot   = np.matmul( Rzyx(*self.eta.to_list()[3:6]), nu[0:3] ) 
@@ -149,6 +165,10 @@ class IVessel(IDrawable):
     @property
     def geometry_for_2D_plot(self) -> list[np.ndarray, np.ndarray]:
         return self.geometry_for_3D_plot[0:2]
+    
+    @property
+    def n_actuators(self) -> int:
+        return len(self.actuators)
     
 @dataclass
 class TestVesselParams:

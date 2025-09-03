@@ -30,6 +30,10 @@ class IGuidance(ABC):
     @abstractmethod
     def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         return eta, nu
+    
+    @abstractmethod
+    def reset(self) :
+        pass
 
 class Guidance(IGuidance):
     def __init__(
@@ -46,4 +50,5 @@ class Guidance(IGuidance):
     def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
         return np.array([0, 0, 0, 0, 0, self.desired_heading], float), np.array([self.desired_speed, 0, 0, 0, 0, 0], float)
 
-
+    def reset(self):
+        pass

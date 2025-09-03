@@ -55,6 +55,9 @@ class IActuator(ABC):
             Output:     f (np.ndarray) - Generalized force (fx, fy, fz, Mx, My, Mz)
         """
         return np.zeros((6,))   
+    
+    def reset(self):
+        self.u_prev = self.u_0.copy()
 
 class Thruster(IActuator):
     def __init__(
@@ -82,7 +85,9 @@ class Thruster(IActuator):
     
     def Ti(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
         
-        return 
+        return
+
+
             
 
 class fin:
