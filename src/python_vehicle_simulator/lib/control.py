@@ -13,7 +13,8 @@ Author:     Thor I. Fossen
 import numpy as np
 from python_vehicle_simulator.utils.math_fn import ssa, Rzyx
 from python_vehicle_simulator.utils.unit_conversion import DEG2RAD
-from python_vehicle_simulator.lib import Current, Wind, Obstacle
+from python_vehicle_simulator.lib.weather import Current, Wind
+from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.lib.actuator import Thruster
 from typing import List, Tuple
 from abc import ABC, abstractmethod

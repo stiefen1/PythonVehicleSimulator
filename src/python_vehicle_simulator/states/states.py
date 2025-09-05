@@ -24,7 +24,7 @@ class Eta:
         return np.array(self.to_list(), float)
     
     def zeros_inplace(self) -> None:
-        self = Eta()
+        self.n, self.e, self.d, self.roll, self.pitch, self.yaw = 0., 0., 0., 0., 0., 0.
     
     @property
     def rpy(self) -> Tuple[float, float, float]:

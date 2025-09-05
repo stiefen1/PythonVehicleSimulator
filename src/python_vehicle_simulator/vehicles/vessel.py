@@ -1,8 +1,10 @@
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 from python_vehicle_simulator.visualizer.drawable import IDrawable
-from python_vehicle_simulator.lib import IGuidance, Guidance, INavigation, Navigation, IControl, Control
+from python_vehicle_simulator.lib.guidance import IGuidance, Guidance
+from python_vehicle_simulator.lib.navigation import INavigation, Navigation
+from python_vehicle_simulator.lib.control import IControl, Control
 from python_vehicle_simulator.lib.integrator import Euler
 from python_vehicle_simulator.states.states import Eta, Nu
 from python_vehicle_simulator.utils.math_fn import Rzyx, Tzyx
@@ -37,20 +39,22 @@ class IVessel(IDrawable):
             params,
             dt,
             *args,
-            eta:Eta=None,
-            nu:Nu=None,
+            eta:Union[Eta, Tuple]=None,
+            nu:Union[Nu, Tuple]=None,
             guidance:IGuidance=None,
             navigation:INavigation=None,
             control:IControl=None,
             actuators:List[IActuator]=None,
             name:str='IVessel',
             mmsi:str=None, # Maritime Mobile Service Identity number
+            verbose_level:int=0,
             **kwargs
     ):
+        super().__init__(verbose_level=verbose_level)
         self.params = params
         self.dt = dt
-        self.eta = eta or Eta()
-        self.nu = nu or Nu()
+        self.eta = eta if isinstance(eta, Eta) else Eta(*eta) if eta is not None else Eta()
+        self.nu = nu if isinstance(nu, Nu) else Nu(*nu) if nu is not None else Nu()
         self._eta_0 = deepcopy(self.eta)
         self._nu_0 = deepcopy(self.nu)
         self.guidance = guidance or Guidance()
@@ -80,14 +84,14 @@ class IVessel(IDrawable):
         """
         # GNC
         ## Navigation: measure environments
-        obs = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
+        measurements, info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
 
         # control_commands can be devised by an RL agent for example.
         if control_commands is None:
             ## Guidance: Get desired states
-            eta_des, nu_des = self.guidance(*obs)
+            eta_des, nu_des = self.guidance(**measurements)
             ## Control: Generate action to track desired states
-            control_commands = self.control(eta_des, nu_des, *obs)
+            control_commands = self.control(eta_des, nu_des, **measurements)
 
         # Actuators
         tau_actuators = np.zeros((6,), float)
@@ -106,7 +110,7 @@ class IVessel(IDrawable):
         eta = Euler(self.eta.to_numpy(), eta_dot, self.dt)
         
         self.eta, self.nu = Eta(*eta), Nu(*nu)
-        return (obs, 0, False, False, {}, False)
+        return (measurements, 0, False, False, {}, False)
     
     def reset(self):
         for actuator in self.actuators:
@@ -153,7 +157,13 @@ class IVessel(IDrawable):
     
     def get_geometry_from_pose(self, eta:Eta) -> np.ndarray:
         return Rzyx(*eta.rpy) @ self.initial_geometry + eta.to_numpy()[0:3].reshape(3, 1)
-    
+
+    def get_geometry_in_frame(self, eta:Eta) -> np.ndarray:
+        """
+        get geometry in a frame specified by nedrpy
+        """
+        return Rzyx(*eta.rpy).T @ (Rzyx(*self.eta.rpy) @ self.initial_geometry - eta.to_numpy()[0:3].reshape(3, 1) + self.eta.to_numpy()[0:3].reshape(3, 1))
+
     @property
     def geometry(self) -> np.ndarray:
         return self.get_geometry_from_pose(self.eta)
@@ -258,7 +268,29 @@ def interactive_3D_vessel() -> None:
 
     plt.show()
 
+def test_geometry_in_target_body_frame() -> None:
+    import matplotlib.pyplot as plt
+    params = TestVesselParams()
+    vessel = TestVessel(params, None, Eta(n=5, e=10, roll=0., pitch=0., yaw=2), Nu(u=1, v=0.1, r=0.0))
+    tv = TestVessel(params, None, Eta(n=5, e=20, roll=0., pitch=0., yaw=-0.5), Nu(u=1, v=0.1, r=0.0))
+    tv_geom = tv.get_geometry_in_frame(vessel.eta)
+
+
+    ax = vessel.fill(c='blue')
+    tv.fill(ax=ax, c='green')
+    ax.set_aspect('equal')
+    plt.show()
+
+    vessel.eta = Eta() # Plot in vessel frame
+    ax = vessel.fill(c='blue')
+    ax.plot(tv_geom[1, :], tv_geom[0, :], c='green')
+    vessel.plot(ax=ax, c='red')
+    vessel.scatter(ax=ax, c='black')
+    ax.set_aspect('equal')
+    plt.show()
+
 
 if __name__ == "__main__":
-    show_2D_vessel()
-    interactive_3D_vessel()
+    # show_2D_vessel()
+    # interactive_3D_vessel()
+    test_geometry_in_target_body_frame()
