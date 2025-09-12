@@ -22,7 +22,11 @@ class IDrawable(ABC):
         if ax is None:
             fig, ax = plt.subplots()
         if verbose >= self.verbose_level:
-            return self.__plot__(ax, *args, **kwargs)
+            for item in self.__dict__.values():
+                if isinstance(item, IDrawable):
+                    # If object is a drawable, plot all sub objects
+                    item.plot(*args, ax=ax, verbose=verbose, **kwargs)
+            return self.__plot__(*args,ax=ax, **kwargs)
         else:
             return ax
     
@@ -30,6 +34,10 @@ class IDrawable(ABC):
         if ax is None:
             fig, ax = plt.subplots()
         if verbose >= self.verbose_level:
+            for item in self.__dict__.values():
+                if isinstance(item, IDrawable):
+                    # If object is a drawable, plot all sub objects
+                    item.scatter(*args, ax=ax, verbose=verbose, **kwargs)
             return self.__scatter__(ax, *args, **kwargs)
         else:
             return ax
@@ -38,6 +46,10 @@ class IDrawable(ABC):
         if ax is None:
             fig, ax = plt.subplots()
         if verbose >= self.verbose_level:
+            for item in self.__dict__.values():
+                if isinstance(item, IDrawable):
+                    # If object is a drawable, plot all sub objects
+                    item.fill(*args, ax=ax, verbose=verbose, **kwargs)
             return self.__fill__(ax, *args, **kwargs)
         else:
             return ax

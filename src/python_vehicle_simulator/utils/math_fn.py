@@ -1,5 +1,5 @@
 from math import cos, sin, pi
-import numpy as np
+import numpy as np, casadi as ca
 
 #------------------------------------------------------------------------------
 
@@ -77,6 +77,22 @@ def Rzyx(phi,theta,psi):
         [ cpsi*cth, -spsi*cphi+cpsi*sth*sphi, spsi*sphi+cpsi*cphi*sth ],
         [ spsi*cth,  cpsi*cphi+sphi*sth*spsi, -cpsi*sphi+sth*spsi*cphi ],
         [ -sth,      cth*sphi,                 cth*cphi ] ])
+
+    return R
+
+def R_casadi(psi):
+    """
+    R = R(psi) computes the Euler angle rotation matrix R in SO(3)
+    """
+    
+    cpsi = ca.cos(psi)
+    spsi = ca.sin(psi)
+    
+    R = np.array([
+        [ cpsi, -spsi, 0],
+        [ spsi,  cpsi, 0],
+        [ 0, 0, 1 ]
+        ])
 
     return R
 

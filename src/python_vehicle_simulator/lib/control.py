@@ -19,6 +19,7 @@ from python_vehicle_simulator.lib.actuator import Thruster
 from typing import List, Tuple
 from abc import ABC, abstractmethod
 from math import sqrt
+import keyboard
 
 class IControl(ABC):
     def __init__(
@@ -52,6 +53,43 @@ class Control(IControl):
 
     def reset(self):
         pass
+
+class UserInputControlTwoTrusters(Control):
+    """
+
+    """
+    def __init__(
+            self,
+            *args,
+            **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        speeds = {'zero': 0, 'low': 33, 'medium': 66, 'high': 100}
+        self.hashmap = {
+            '1': (speeds['zero'], speeds['zero']),
+            '2':(speeds['low'], speeds['zero']),
+            '3': (speeds['medium'], speeds['zero']),
+            '4': (speeds['high'], speeds['zero']),
+            'q': (speeds['zero'], speeds['low']),
+            'w': (speeds['low'], speeds['low']),
+            'e': (speeds['medium'], speeds['low']),
+            'r': (speeds['high'], speeds['low']),
+            'a': (speeds['zero'], speeds['medium']),
+            's': (speeds['low'], speeds['medium']),
+            'd': (speeds['medium'], speeds['medium']),
+            'f': (speeds['high'], speeds['medium']),
+            'y': (speeds['zero'], speeds['high']),
+            'x': (speeds['low'], speeds['high']),
+            'c': (speeds['medium'], speeds['high']),
+            'v': (speeds['high'], speeds['high'])
+        }
+        self.u = [np.array([0.0]), np.array([0.0])]
+
+    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
+        for key in self.hashmap.keys():
+            if keyboard.is_pressed(key):
+                self.u = [np.array(ui) for ui in self.hashmap[key]]
+        return self.u
 
 class HeadingAutopilotTwoThrusters(IControl):
     def __init__(
