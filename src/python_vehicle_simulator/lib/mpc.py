@@ -1,0 +1,732 @@
+from python_vehicle_simulator.lib.control import IControl
+from python_vehicle_simulator.lib.weather import Current, Wind
+from python_vehicle_simulator.lib.obstacle import Obstacle
+from python_vehicle_simulator.vehicles.revolt import RevoltThrusterParameters
+from typing import List, Any, Tuple, Dict
+from python_vehicle_simulator.utils.unit_conversion import knot_to_m_per_sec
+from python_vehicle_simulator.utils.math_fn import R_casadi
+from python_vehicle_simulator.lib.physics import RHO, GRAVITY
+import numpy as np, casadi as ca, matplotlib.pyplot as plt
+from math import pi
+
+INF = float('inf')
+MASS = 257
+LPP = 3.0
+rg = np.array([0., 0., 0.]) # Position of CG
+VOL = 0.268 # m^3 Volume
+VIz = 0.310 # m^5 Volume Moment of Inertia 
+
+
+class MPCPathTrackingRevolt(IControl):
+    """
+    Model-Predictive Controller for path tracking of the ReVolt ASV, based on 
+
+    Reinforcement learning-based NMPC for tracking control of ASVs:Theory and experiments
+
+    and 
+
+    MPC-based Reinforcement Learning for a Simplified Freight Mission of Autonomous Surface Vehicles
+
+
+    STATES:
+    eta = [n, e, psi]
+    nu = [u, v, r]
+
+    INPUTS:
+    u   = [alphas, forces]
+        = [
+            a1, a2, a3,
+            f1, f2, f3
+        ]
+    
+    """
+
+    AlphaActualOpt:ca.DM = None
+    ForceActualOpt:ca.DM = None
+    UActualOpt:ca.DM = None
+    AlphaSetpointOpt:ca.DM = None
+    ForceSetpointOpt:ca.DM = None
+    USetpointOpt:ca.DM = None
+    XOpt:ca.DM = None
+
+    # Decision variables
+    ## States
+    X:ca.SX = None
+
+    ## Command inputs
+    Alpha:ca.SX = None # Azimuth angles
+    Force:ca.SX = None # Thruster forces
+
+    def __init__(
+            self,
+            *args,
+            horizon:int=20,
+            dt:float=0.02,
+            tau_ext:Tuple=(0., 0., 0.),
+            **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.horizon = horizon
+        self.dt = dt
+
+        self.Nu = 6 # 3 forces + 3 azimuth angles
+        self.Nx = 6 # north, east, down
+
+        # State constraints
+        self.lbx = np.array([-INF, -INF, -pi, -1, -1, -pi/6])
+        self.ubx = np.array([INF, INF, pi, knot_to_m_per_sec(3), 1, pi/6])
+
+        # External disturbances
+        self.tau_ext = np.array(tau_ext)
+
+        Xudot, Yvdot, Yrdot, Nvdot = (-VOL*RHO*np.array([0.0253, 0.1802, 0.0085 * LPP, 0.0099 * LPP**2])).tolist()
+        Xu, Yv, Yr, Nv, Nr = (-np.array([
+            0.102 * RHO * VOL * GRAVITY / LPP,
+            1.212 * GRAVITY / LPP,
+            0.056 * RHO * VOL * np.sqrt(GRAVITY * LPP),
+            0.056 * RHO * VOL * np.sqrt(GRAVITY * LPP),
+            0.0601 * RHO * VOL * np.sqrt(GRAVITY * LPP)
+            ])).tolist()
+        Iz = MASS / VOL * VIz
+
+        ## Inertia Matrix
+        MRB = np.array([
+            [MASS, 0, 0],
+            [0, MASS, MASS*rg[0]],
+            [0, MASS*rg[0], Iz]
+        ])
+        MA = np.array([
+            [-Xudot, 0, 0],
+            [0, -Yvdot, -Yrdot],
+            [0, -Yrdot, -Nvdot]
+        ])
+        self.Minv = np.linalg.inv(MA + MRB)
+
+        ## Coriolis-Centripetal Matrix
+        CRB = lambda nu : np.array([
+            [0, 0, -MASS * (rg[0]*nu[2] + nu[1])],
+            [0, 0, MASS * nu[0]],
+            [MASS * (rg[0]*nu[2] + nu[1]), -MASS * nu[0], 0]
+        ])
+        CA = lambda nu : np.array([
+            [0, 0, Yvdot * nu[1] + Yrdot * nu[2]],
+            [0, 0, -Xudot * nu[0]],
+            [-Yvdot * nu[1]-Yrdot * nu[2], Xudot * nu[0], 0]
+        ])
+        self.C = lambda nu : CA(nu) + CRB(nu)
+
+        ## Damping Matrix
+        self.D = np.array([
+            [-Xu, 0, 0],
+            [0, -Yv, -Yr],
+            [0, -Nv, -Nr]
+        ])
+
+        ## Actuators
+        self.actuator_params = RevoltThrusterParameters()
+        self.T = lambda alpha, lx, ly : np.array([
+            ca.cos(alpha),
+            ca.sin(alpha),
+            lx*ca.sin(alpha) - ly * ca.cos(alpha)
+        ])
+        self.lx = self.actuator_params.xy[:, 0]
+        self.ly = self.actuator_params.xy[:, 1]
+
+        # Force constraints
+        self.lbf = self.actuator_params.f_min
+        self.ubf = self.actuator_params.f_max
+
+        # Angle constraints
+        self.lba = np.array([-np.pi, -np.pi, -np.pi])
+        self.uba = np.array([np.pi, np.pi, np.pi])
+
+        # Complete command constraints
+        self.lbu = np.concatenate([self.lbf, self.lba])
+        self.ubu = np.concatenate([self.ubf, self.uba])
+
+        # Time constant
+        self.actuators_time_constant = np.array(3*[self.actuator_params.T_n] + 3*[self.actuator_params.T_a])
+        
+        self.init_nlp()
+
+    def actuators_dynamics(self, uk:ca.SX, *args, **kwargs) -> ca.SX:
+        """
+        Compute the total generalized force based on thruster's forces and azimuth angles
+        """
+        tau_a = ca.SX([0., 0., 0.])
+        for i in range(3): 
+            tau_a += self.T(uk[i+3], self.lx[i], self.ly[i]) * uk[i]
+        return tau_a
+
+    def dynamics(self, xk:ca.SX, uk:ca.SX, *args, **kwargs) -> ca.SX:
+        """
+        xk : etak, nuk = n, e, psi, u, v, r
+        uk : fk, alphak = f1, f2, f3, a1, a2, a3
+
+        Input commands are the ACTUAL VALUES ***NOT*** SETPOINTS
+        """
+        # Actuators
+        tau_a = self.actuators_dynamics(uk, *args, **kwargs)
+
+        # Dynamics
+        nu_dot = self.Minv @ (
+            tau_a -
+            self.tau_ext -
+            self.C(xk[3:6]) @ xk[3:6] +
+            self.D @ xk[3:6]
+        )
+
+        # Euler integration
+        nukp1 = xk[3:6] + nu_dot * self.dt
+        eta_dot = ca.mtimes(R_casadi(xk[2]), nukp1)
+        etakp1 = xk[0:3] + eta_dot * self.dt
+        
+        # Return next states
+        return ca.vertcat(etakp1, nukp1)
+    
+    def __lagrange__(self, xk:ca.SX, uk:ca.SX, pk_des:Tuple[float, float, float], *args, sk:ca.SX=None, k:int=None, **kwargs) -> ca.SX:
+        """
+        k can be used if l(xk, uk) changes at each stage -> e.g. path tracking, discount factor, etc..
+        """
+        return ca.mtimes(ca.transpose(xk[0:3]-np.array(pk_des)), xk[0:3]-np.array(pk_des))
+
+    def __mayer__(self, xf:ca.SX, pf_des:Tuple[float, float, float], *args, sf:ca.SX=None, **kwargs) -> ca.SX:
+        return 50 * self.__lagrange__(xf, np.zeros((self.Nu,)), pf_des, *args, sk=sf, **kwargs)
+
+    def __format_commands__(self, commands:np.ndarray) -> List[np.ndarray]:
+        return [command for command in commands]
+
+    def set_dynamic_constraints(self, *args, **kwargs) -> None:
+        """
+        
+        """
+        ## Vessel
+        self.dynamic_constraints = ca.SX.nan(self.Nx) # self.get_x(0) # Reserve space for constraint x(0) = 0 to be set at runtime
+        self.dynamic_actuator_constraints = ca.SX.nan(self.Nu) #self.get_u(0) # Reserve space for initial (delta) input constraint
+        for k in range(0, self.horizon):
+            self.dynamic_constraints = ca.vertcat(self.dynamic_constraints, self.get_x(k+1) - self.dynamics(self.get_x(k), self.get_u_actual(k), *args, **kwargs))
+        
+        # Consider time constant for actuator dynamics
+        for k in range(0, self.horizon-1):
+            self.dynamic_actuator_constraints = ca.vertcat(self.dynamic_actuator_constraints, self.get_u_actual(k+1) - self.get_u_actual(k) - self.dt * (self.get_u_setpoint(k+1) - self.get_u_actual(k)) / self.actuators_time_constant)
+
+        self.LBDynamics = np.array([self.Nx*[0.0]]).repeat(self.horizon + 1, axis=0).flatten().tolist() # Lower Bound Dynamics, including 0 <= x(0) - x0 <= 0
+        self.UBDynamics = np.array([self.Nx*[0.0]]).repeat(self.horizon + 1, axis=0).flatten().tolist() # Upper Bound Dynamics, including 0 <= x(0) - x0 <= 0
+        self.LBActuatorsDynamics = np.array([self.Nu*[0.0]]).repeat(self.horizon, axis=0).flatten().tolist()
+        self.UBActuatorsDynamics = np.array([self.Nu*[0.0]]).repeat(self.horizon, axis=0).flatten().tolist()
+
+
+    def set_states_and_commands_constraints(self, *args, **kwargs) -> None:
+        # States
+        self.LBX = self.lbx[None, :].repeat(self.horizon + 1, axis=0).flatten().tolist()
+        self.UBX = self.ubx[None, :].repeat(self.horizon + 1, axis=0).flatten().tolist()
+        # Actual forces & angles
+        self.LBUA = self.lbu[None, :].repeat(self.horizon, axis=0).flatten().tolist()
+        self.UBUA = self.ubu[None, :].repeat(self.horizon, axis=0).flatten().tolist()
+
+
+    def init_nlp(self, *args, **kwargs) -> None:
+        """
+        
+        """
+        # Decision Variables
+        self.X = ca.SX.sym("X", self.Nx * (self.horizon + 1))   # States
+        self.UActual = ca.SX.sym("UActual", self.Nu * self.horizon)   # Actual command input
+        self.USetpoint = ca.SX.sym("USetpoint", self.Nu * self.horizon) # Setpoint command input
+
+        # Constraints
+        self.set_states_and_commands_constraints(*args, **kwargs)   # x_k \in X, u_k \in U
+        self.set_dynamic_constraints(*args, **kwargs)               # x_k+1 = f(x_k, u_k) || Time constant for actuators
+
+        # Initialize NLP  
+
+    def set_cost(self, path:List[Tuple[float, float, float]], *args, **kwargs) -> None:
+        """
+        
+        """
+        self.cost = ca.DM(0.0)
+        for k in range(0, self.horizon):
+            xk, uk = self.get_x(k), self.get_u_actual(k) # X_steps[k], U_steps[k]
+            self.cost += self.__lagrange__(xk, uk, path[k], *args, k=k, **kwargs)
+        self.cost += self.__mayer__(self.get_x(k+1), path[k+1], *args, **kwargs)
+
+    def get_initial_guess(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, **kwargs) -> Tuple[ca.DM, ca.DM]:        
+        x_prev = x0.copy()
+        X0 = x_prev
+
+        U0Actual = []
+        for _ in range(0, self.horizon):
+            x = self.dynamics(x_prev, u_prev_actual)
+            X0 = ca.vertcat(X0, x)
+            U0Actual = ca.vertcat(U0Actual, u_prev_actual)
+
+        return ca.DM(ca.vertcat(X0, U0Actual, U0Actual)) # Assumption: Actual command = setpoint (steady state)
+
+    def set_initial_constraints(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, **kwargs) -> None:       
+        self.dynamic_constraints[0:self.Nx] = self.get_x(0) - x0 # Replace first constraint
+        self.dynamic_actuator_constraints[0:self.Nu] = self.get_u_actual(0) - u_prev_actual - self.dt * (self.get_u_setpoint(0) - u_prev_actual) / self.actuators_time_constant 
+
+    def solve(self, initial_guess, options:dict={'ipopt.print_level':5, 'print_time':0}, *args, **kwargs) -> Dict:
+        nlp = {
+            "x": ca.vertcat(self.X, self.UActual, self.USetpoint),
+            "f": self.cost,
+            "g": ca.vertcat(self.dynamic_constraints, self.dynamic_actuator_constraints)
+        }
+
+        solver_in = {
+            "x0": initial_guess,
+            "lbx": self.LBX + self.LBUA + self.LBUA, #  + self.LBFS + self.LBAS,
+            "ubx": self.UBX + self.UBUA + self.UBUA, # + self.UBFS + self.UBAS,
+            "lbg": self.LBDynamics + self.LBActuatorsDynamics, # + self.LBObstacles,
+            "ubg": self.UBDynamics + self.UBActuatorsDynamics  # + self.UBObstacles
+        }
+
+        self.solver = ca.nlpsol("mpc_solver", "ipopt", nlp, options)
+        solver_out = self.solver(**solver_in)
+        # print("OUT: ", solver_out)
+        X = solver_out['x'].full().flatten()
+        g = solver_out['g'].full().flatten()
+        self.XOpt = X[0:self.Nx*(self.horizon+1)].reshape(-1, self.Nx)
+        self.UActualOpt = X[self.Nx*(self.horizon+1): self.Nx*(self.horizon+1) + self.Nu*self.horizon].reshape(-1, self.Nu)
+        self.USetpointOpt = X[self.Nx*(self.horizon+1) + self.Nu*self.horizon: self.Nx*(self.horizon+1) + 2*self.Nu*self.horizon].reshape(-1, self.Nu)
+        self.DynamicsConstraintsOpt = g[0:(self.horizon+1)*self.Nx]
+        self.ActuatorDynamicsConstraintsOpt = g[(self.horizon+1)*self.Nx:(self.horizon+1)*self.Nx+self.horizon*self.Nu]
+
+        print("XOpt: ", self.XOpt)
+        print("\n")
+        print("UActualOpt: ", self.UActualOpt)
+        print("\n")
+        print("USetpointOpt: ", self.USetpointOpt)
+        print("\n")
+        print("DynamicsConstraintsOpt: ", self.DynamicsConstraintsOpt)
+        print("\n")
+        print("ActuatorDynamicsConstraintsOpt: " , self.ActuatorDynamicsConstraintsOpt)
+
+
+        # self.get_u_actual(k+1) - self.get_u_actual(k) - self.dt * (self.get_u_setpoint(k+1) - self.get_u_actual(k)) / self.actuators_time_constant)
+        # print("CONS: ", self.UActualOpt - self.dt * (self.USetpointOpt) / self.actuators_time_constant)
+        print(self.actuators_time_constant)
+        # print(arr)
+        # self.Xopt = arr[0:(self.horizon+1)*self.Nx].reshape((self.horizon+1, self.Nx)).T
+        # self.Uopt = arr[(self.horizon+1)*self.Nx:].reshape((self.horizon, self.Nu)).T
+
+        # # Remove last constraint (i.e. x[0] = x0) after solve is done, since it will change for next nlp
+        # self.G = self.G[0:-self.Nx]
+        # self.LBG = self.LBG[0:-self.Nx]
+        # self.UBG = self.UBG[0:-self.Nx] 
+
+
+        """
+        
+        UOPT MUST BE TAKEN FROM THE SETPOINT COMMAND VECTOR !!!
+        BECAUSE THE TRUE INPUT TO THE SYSTEM ARE SETPOINT!!!
+        
+        """
+
+        return {}
+
+    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, path:List[Tuple[float, float, float]], *args, initial_guess=None, u_prev_actual:np.ndarray=None, **kwargs) -> List[np.ndarray]:
+        x0 = np.concatenate([eta, nu])
+        if self.u_prev_actual is None:
+            if u_prev_actual is None:
+                u_prev_actual = np.array(self.Nu * [0.0])
+        else:
+            u_prev_actual = self.u_prev_actual.copy()
+
+        initial_guess = initial_guess or self.get_initial_guess(x0, u_prev_actual, *args, **kwargs)
+        self.set_cost(path, *args, **kwargs) # stage & terminal cost
+        self.set_initial_constraints(x0, u_prev_actual, *args, **kwargs)
+        self.solve(initial_guess, *args, **kwargs) # Solve for X, U, V
+        return self.__format_commands__(self.u_prev_setpoint, *args, **kwargs)
+    
+    def reset(self):
+        pass
+
+    def get_x(self, k) -> ca.SX:
+        return self.X[k*self.Nx:(k+1)*self.Nx]
+    
+    def get_u_actual(self, k) -> ca.SX:
+        return self.UActual[k*self.Nu:(k+1)*self.Nu]
+    
+    def get_u_setpoint(self, k) -> ca.SX:
+        return self.USetpoint[k*self.Nu:(k+1)*self.Nu]
+
+    @property
+    def u_prev_actual(self) -> np.ndarray:
+        if self.UActualOpt is not None:
+            return self.UActualOpt[0:self.Nu]
+        else:
+            return None
+        
+    @property
+    def u_prev_setpoint(self) -> np.ndarray:
+        if self.USetpointOpt is not None:
+            return self.USetpointOpt[0:self.Nu]
+        else:
+            return None
+        
+    def plot_results(self):
+        """
+        Plot MPC results:
+        - Input setpoint commands (as steps, dashed)
+        - Actual actuator values (as lines)
+        - Command constraints (shaded region)
+        - Psi values
+        - 2D trajectory (north, east)
+        - Speed values (u, v, r)
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        XOpt = np.array(self.XOpt)  # shape: (horizon+1, Nx)
+        USetpointOpt = np.array(self.USetpointOpt)  # shape: (horizon, Nu)
+        UActualOpt = np.array(self.UActualOpt)      # shape: (horizon, Nu)
+
+        timesteps_x = np.arange(XOpt.shape[0]) * self.dt
+        timesteps_u = np.arange(USetpointOpt.shape[0]) * self.dt
+
+        # Colors for forces and angles (consistent for actual/setpoint)
+        force_colors = ['tab:blue', 'tab:orange', 'tab:green']
+        angle_colors = ['tab:blue', 'tab:orange', 'tab:green']
+
+        # Figure 1: Input commands (forces and angles)
+        fig1, axs1 = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+
+        # Plot command constraints as shaded regions
+        for i in range(3):
+            axs1[0].axhspan(self.lbu[i], self.ubu[i], color=force_colors[i], alpha=0.08)
+        for i in range(3):
+            axs1[1].axhspan(self.lbu[i+3], self.ubu[i+3], color=angle_colors[i], alpha=0.08)
+
+        # Forces
+        for i in range(3):
+            axs1[0].plot(timesteps_u, UActualOpt[:, i], label=f'Force {i+1} Actual', color=force_colors[i])
+            axs1[0].step(timesteps_u, USetpointOpt[:, i], where='post', linestyle='--', label=f'Force {i+1} Setpoint', color=force_colors[i])
+        axs1[0].set_ylabel('Force [N]')
+        axs1[0].legend()
+        axs1[0].grid(True)
+
+        # Angles
+        for i in range(3):
+            axs1[1].plot(timesteps_u, UActualOpt[:, i+3], label=f'Angle {i+1} Actual', color=angle_colors[i])
+            axs1[1].step(timesteps_u, USetpointOpt[:, i+3], where='post', linestyle='--', label=f'Angle {i+1} Setpoint', color=angle_colors[i])
+        axs1[1].set_ylabel('Azimuth [rad]')
+        axs1[1].set_xlabel('Time [s]')
+        axs1[1].legend()
+        axs1[1].grid(True)
+        fig1.suptitle('Actuator Commands (Actual & Setpoint) with Constraints', fontsize=14)
+        fig1.tight_layout(rect=[0, 0, 1, 0.97])
+
+        # Figure 2: Psi values
+        fig2, ax2 = plt.subplots(figsize=(8, 4))
+        ax2.plot(timesteps_x, XOpt[:, 2], color='tab:blue')
+        ax2.set_title('Yaw Angle (Psi) over Time', fontsize=14)
+        ax2.set_ylim([-np.pi, np.pi])
+        ax2.set_xlabel('Time [s]')
+        ax2.set_ylabel('Psi [rad]')
+        ax2.grid(True)
+
+        # Figure 3: 2D Trajectory (east, north) -> east on x, north on y
+        fig3, ax3 = plt.subplots(figsize=(7, 7))
+        ax3.plot(XOpt[:, 1], XOpt[:, 0], marker='o', color='tab:green', label='Trajectory')
+        ax3.set_title('2D Trajectory (East-North)', fontsize=14)
+        ax3.set_xlabel('East [m]')
+        ax3.set_ylabel('North [m]')
+        ax3.grid(True)
+        ax3.axis('equal')
+        ax3.legend()
+
+        # Figure 4: Speed values (u, v, r)
+        fig4, ax4 = plt.subplots(figsize=(10, 5))
+        ax4.plot(timesteps_x, XOpt[:, 3], label='Surge (u)', color='tab:red')
+        ax4.plot(timesteps_x, XOpt[:, 4], label='Sway (v)', color='tab:orange')
+        ax4.plot(timesteps_x, XOpt[:, 5], label='Yaw rate (r)', color='tab:purple')
+        ax4.set_title('Speed Components over Time', fontsize=14)
+        ax4.set_xlabel('Time [s]')
+        ax4.set_ylabel('Speed [m/s] / Yaw rate [rad/s]')
+        ax4.legend()
+        ax4.grid(True)
+
+        plt.show()
+
+    def animate_heading(self, interval=50, arrow_length=0.5):
+        """
+        Animates the ship's position and heading (psi) in time according to the optimized states.
+        The ship is shown as an arrow indicating heading in the east-north plane.
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FuncAnimation
+        import numpy as np
+
+        XOpt = np.array(self.XOpt)
+        east = XOpt[:, 1]
+        north = XOpt[:, 0]
+        psi = XOpt[:, 2]
+
+        fig, ax = plt.subplots(figsize=(7, 7))
+        ax.plot(east, north, 'k--', alpha=0.3, label='Trajectory')
+        ship_point, = ax.plot([], [], 'ro', markersize=8, label='Ship')
+        arrow = None  # Will hold the current arrow
+        ax.set_xlabel('East [m]')
+        ax.set_ylabel('North [m]')
+        ax.set_title('Ship Position & Heading Animation')
+        ax.grid(True)
+        ax.axis('equal')
+        ax.legend()
+
+        def init():
+            ship_point.set_data([], [])
+            return ship_point,
+
+        def update(frame):
+            nonlocal arrow
+            ship_point.set_data([east[frame]], [north[frame]])
+            # Remove previous arrow if it exists
+            if arrow is not None:
+                arrow.remove()
+            # Draw new arrow for heading
+            print("psi: ", psi[frame]*180/np.pi)
+            arrow = ax.arrow(
+                east[frame], north[frame],
+                arrow_length * np.sin(psi[frame]),
+                arrow_length * np.cos(psi[frame]),
+                head_width=0.2, head_length=0.2, fc='r', ec='r'
+            )
+            return ship_point, arrow
+
+        ani = FuncAnimation(fig, update, frames=len(east), init_func=init,
+                            blit=False, interval=interval, repeat=False)
+        plt.show()
+
+
+    
+def test() -> None:
+    mpc = MPCPathTrackingRevolt(
+        horizon=200,
+        dt=0.05
+    )
+    # print(mpc.LBA, mpc.UBA, mpc.LBF, mpc.UBF, mpc.LBX, mpc.UBX)
+    # print(mpc.dynamics(np.array(6*[0.0]), np.array(6*[100])))
+    # print(mpc.get_initial_guess(np.array([0., 0., 0., 0., 0., 0.]), u_prev_actual=np.array([20, 50, 50, 0.1, 0.4, 0.5])))
+    mpc.__get__(None, None, np.array(3*[0.0]), np.array(3*[0.0]), None, None, None, None, np.array([(mpc.horizon+1)*(2, 0.5, np.pi/2)]).reshape(-1, 3).tolist())
+    # 
+    mpc.animate_heading()
+    mpc.plot_results()
+
+if __name__ == "__main__":
+    test()
+
+
+
+
+
+
+# class MPCPathTrackingRevolt(IControl):
+#     """
+#     Model-Predictive Controller for path tracking of the ReVolt ASV, based on 
+
+#     Reinforcement learning-based NMPC for tracking control of ASVs:Theory and experiments
+
+#     and 
+
+#     MPC-based Reinforcement Learning for a Simplified Freight Mission of Autonomous Surface Vehicles
+    
+#     """
+
+#     Uopt:ca.DM = None
+#     Xopt:ca.DM = None
+#     Sopt:ca.DM = None
+#     X:ca.SX = None
+#     U:ca.SX = None
+#     S:ca.SX = None
+
+#     def __init__(
+#             self,
+#             lbx:Tuple,
+#             ubx:Tuple,
+#             lbu:Tuple,
+#             ubu:Tuple,
+#             lbdu:Tuple,
+#             ubdu:Tuple,
+#             *args,
+#             horizon:int=20,
+#             **kwargs
+#     ):
+#         super().__init__(*args, **kwargs)
+#         self.lbx = np.array(lbx)
+#         self.ubx = np.array(ubx)
+#         self.lbu = np.array(lbu)
+#         self.ubu = np.array(ubu)
+#         self.lbdu = np.array(lbdu)
+#         self.ubdu = np.array(ubdu)
+#         self.horizon = horizon
+#         self.Nu = len(lbu)
+#         self.Nx = len(lbx)
+#         self.init_nlp()
+
+#     @abstractmethod
+#     def __model__(self, xk:ca.SX, uk:ca.SX, *args, **kwargs) -> ca.SX:
+#         return []
+    
+#     @abstractmethod
+#     def __lagrange__(self, xk:ca.SX, uk:ca.SX, *args, sk:ca.SX=None, k:int=None, **kwargs) -> ca.SX:
+#         """
+#         k can be used if l(xk, uk) changes at each stage -> e.g. path tracking, discount factor, etc..
+#         """
+#         pass
+
+#     @abstractmethod
+#     def __mayer__(self, xf:ca.SX, *args, sf:ca.SX=None, **kwargs) -> ca.SX:
+#         pass
+
+#     @abstractmethod
+#     def __format_commands__(self, commands:np.ndarray) -> List[np.ndarray]:
+#         return [command for command in commands]
+
+#     def set_delta_constraints(self, *args, **kwargs) -> None:
+#         """
+        
+#         """
+#         self.delta = self.get_u(0) # Reserve space for constraint du- <= u-u_prev <= du+ to be set at runtime
+#         for k in range(0, self.horizon-1):
+#             self.delta = ca.vertcat(self.delta, self.get_u(k+1) - self.get_u(k))
+#         self.LBDelta = self.lbdu[None, :].repeat(self.horizon) # Lower Bound of Delta u, including du- <= u0 - u_prev <= du+
+#         self.UBDelta = self.ubdu[None, :].repeat(self.horizon) # Upper Bound of Delta u, including du- <= u0 - u_prev <= du+
+
+#     def set_dynamic_constraints(self, *args, **kwargs) -> None:
+#         """
+        
+#         """
+#         self.dynamics = self.get_x(0) # Reserve space for constraint x(0) = 0 to be set at runtime
+#         for k in range(0, self.horizon):
+#             self.dynamics = ca.vertcat(self.dynamics, self.get_x(k+1) - self.__model__(self.get_x(k), self.get_u(k), *args, **kwargs))
+
+#         self.LBDynamics = np.array([self.Nx*[0.0]]).repeat(self.horizon + 1, axis=0).flatten() # Lower Bound Dynamics, including 0 <= x(0) - x0 <= 0
+#         self.UBDynamics = np.array([self.Nx*[0.0]]).repeat(self.horizon + 1, axis=0).flatten() # Upper Bound Dynamics, including 0 <= x(0) - x0 <= 0
+
+#     def set_states_and_commands_constraints(self, *args, **kwargs) -> None:
+#         self.LBX = self.lbx[None, :].repeat(self.horizon + 1, axis=0).flatten()
+#         self.UBX = self.ubx[None, :].repeat(self.horizon + 1, axis=0).flatten()
+#         self.LBU = self.lbu[None, :].repeat(self.horizon, axis=0).flatten()
+#         self.UBU = self.ubu[None, :].repeat(self.horizon, axis=0).flatten()
+
+#     def init_nlp(self, *args, **kwargs) -> None:
+#         """
+        
+#         """
+#         # Decision Variables
+#         self.X = ca.SX.sym("X", self.Nx * (self.horizon + 1))   # States
+#         self.U = ca.SX.sym("U", self.Nu * self.horizon)         # Command input
+
+#         # Constraints
+#         self.set_states_and_commands_constraints(*args, **kwargs)   # x_k \in X, u_k \in U
+#         self.set_dynamic_constraints(*args, **kwargs)               # x_k+1 = f(x_k, u_k)
+
+
+#         # Initialize NLP  
+
+#     def set_cost(self, *args, **kwargs) -> None:
+#         """
+        
+#         """
+#         self.cost = ca.DM(0.0)
+#         # X_steps = ca.vertsplit(self.X, self.Nx)
+#         # U_steps = ca.vertsplit(self.U, self.Nu)
+#         for k in range(0, self.horizon):
+#             xk, uk = self.get_x(k), self.get_u(k) # X_steps[k], U_steps[k]
+#             self.cost += self.__lagrange__(xk, uk, *args, k=k, **kwargs)
+#         self.cost += self.__mayer__(self.get_x(k+1), *args, **kwargs)
+
+#     def get_initial_guess(self, eta:np.ndarray, nu:np.ndarray) -> Tuple[ca.DM, ca.DM]:
+#         if self.u0_opt is None:
+#             self.u0_opt = np.array(self.Nu * [0.0])
+#         X0 = ca.DM()
+#         U0 = ca.DM()
+#         return X0, U0   
+
+#     def set_initial_constraints(self, eta:np.ndarray, nu:np.ndarray, *args, u_prev:np.ndarray=None, **kwargs) -> None:       
+#         self.dynamics[0:self.Nx] = self.get_x(0) - np.concatenate([eta, nu]) # Replace first constraint
+#         self.delta[0:self.Nu] = self.get_u(0) - u_prev
+
+#     def solve(self, initial_guess, options:dict={'ipopt.print_level':0, 'print_time':0}, *args, **kwargs) -> Dict:
+#         nlp = {
+#             "x": ca.vertcat(self.X, self.U),
+#             "f": self.cost,
+#             "g": ca.vertcat(self.dynamics, self.delta)
+#         }
+
+#         solver_in = {
+#             "x0": initial_guess,
+#             "lbx": self.LBX + self.LBU,
+#             "ubx": self.UBX + self.UBU,
+#             "lbg": self.LBDynamics + self.LBDelta,
+#             "ubg": self.UBDynamics + self.UBDelta
+#         }
+
+#         self.solver = ca.nlpsol("mpc_solver", "ipopt", nlp, options)
+#         solver_out = self.solver(**solver_in)
+#         arr = solver_out['x'].full().flatten()
+#         self.Xopt = arr[0:(self.horizon+1)*self.Nx].reshape((self.horizon+1, self.Nx)).T
+#         self.Uopt = arr[(self.horizon+1)*self.Nx:].reshape((self.horizon, self.Nu)).T
+
+#         # Remove last constraint (i.e. x[0] = x0) after solve is done, since it will change for next nlp
+#         self.G = self.G[0:-self.Nx]
+#         self.LBG = self.LBG[0:-self.Nx]
+#         self.UBG = self.UBG[0:-self.Nx] 
+
+#         return {}
+
+#     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, initial_guess=None, u_prev:np.ndarray=None, **kwargs) -> List[np.ndarray]:
+#         initial_guess = initial_guess or self.get_initial_guess(eta, nu, *args, **kwargs)
+#         self.set_cost(*args, **kwargs) # stage & terminal cost
+#         self.set_initial_constraints(eta, nu, *args, **kwargs)
+#         self.solve(initial_guess, *args, **kwargs) # Solve for X, U, V
+#         return self.__format_commands__(self.u0_opt, *args, **kwargs)
+    
+#     def reset(self):
+#         pass
+
+#     def get_x(self, k) -> ca.SX:
+#         return self.X[k*self.Nx:(k+1)*self.Nx]
+    
+#     def get_u(self, k) -> ca.SX:
+#         return self.U[k*self.Nu:(k+1)*self.Nu]
+
+#     @property
+#     def u0_opt(self) -> np.ndarray:
+#         if self.Uopt is not None:
+#             return self.Uopt[0:self.Nu]
+#         else:
+#             raise RuntimeError(f"Uopt is empty. First call solve() or get() to get a valid solution.")
+
+# class PathTrackingMPC(IMPC):
+#     def __init__(
+#             self,
+#             *args,
+#             Qx:np.ndarray=None,
+#             Ru:np.ndarray=None,
+#             Rdu:np.ndarray=None,
+#             **kwargs
+#     ):
+#         super().__init__(*args, **kwargs)
+#         self.Qx = Qx or np.eye(self.Nx)
+#         self.Ru = Ru or np.eye(self.Nu)
+#         self.Rdu = Rdu or np.eye(self.Nu)
+
+#     def __model__(self, xk:ca.SX, uk:ca.SX) -> ca.SX:
+#         return xk
+    
+#     def __lagrange__(self, xk:ca.SX, uk:ca.SX, path:np.ndarray, k:int, sk:ca.SX=None) -> ca.SX:
+#         """
+#         path is a (N, Nx) array describing the path to be followed
+#         """
+#         xdk = ...
+
+#     def __mayer__(self, xf:ca.SX, sf:ca.SX=None) -> ca.SX:
+#         pass
+
+#     def __format_commands__(self, commands:np.ndarray) -> List[np.ndarray]:
+#         return super().__format_commands__(commands)
+
+#     def set_delta_constraints(self, *args, **kwargs) -> None:
+#         return super().set_delta_constraints(*args, **kwargs)
