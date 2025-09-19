@@ -1,20 +1,13 @@
 from python_vehicle_simulator.lib.control import IControl
 from python_vehicle_simulator.lib.weather import Current, Wind
 from python_vehicle_simulator.lib.obstacle import Obstacle
-from python_vehicle_simulator.vehicles.revolt import RevoltThrusterParameters
-from typing import List, Any, Tuple, Dict
+from typing import List, Any, Tuple, Dict, Literal
 from python_vehicle_simulator.utils.unit_conversion import knot_to_m_per_sec
 from python_vehicle_simulator.utils.math_fn import R_casadi
 from python_vehicle_simulator.lib.physics import RHO, GRAVITY
 import numpy as np, casadi as ca, matplotlib.pyplot as plt
+from python_vehicle_simulator.lib.path import PWLPath
 from math import pi
-
-INF = float('inf')
-MASS = 257
-LPP = 3.0
-rg = np.array([0., 0., 0.]) # Position of CG
-VOL = 0.268 # m^3 Volume
-VIz = 0.310 # m^5 Volume Moment of Inertia 
 
 
 class MPCPathTrackingRevolt(IControl):
@@ -59,6 +52,8 @@ class MPCPathTrackingRevolt(IControl):
 
     def __init__(
             self,
+            vessel_params:Any,
+            actuator_params:Any,
             *args,
             horizon:int=20,
             dt:float=0.02,
@@ -66,86 +61,41 @@ class MPCPathTrackingRevolt(IControl):
             **kwargs
     ):
         super().__init__(*args, **kwargs)
+        self.vessel_params = vessel_params
+        self.actuator_params = actuator_params
         self.horizon = horizon
         self.dt = dt
 
         self.Nu = 6 # 3 forces + 3 azimuth angles
-        self.Nx = 6 # north, east, down
+        self.Nx = 6 # north, east, down + derivatives
 
         # State constraints
-        self.lbx = np.array([-INF, -INF, -pi, -1, -1, -pi/6])
-        self.ubx = np.array([INF, INF, pi, knot_to_m_per_sec(3), 1, pi/6])
+        self.lbx = self.vessel_params.lbx
+        self.ubx = self.vessel_params.ubx
 
         # External disturbances
         self.tau_ext = np.array(tau_ext)
 
-        Xudot, Yvdot, Yrdot, Nvdot = (-VOL*RHO*np.array([0.0253, 0.1802, 0.0085 * LPP, 0.0099 * LPP**2])).tolist()
-        Xu, Yv, Yr, Nv, Nr = (-np.array([
-            0.102 * RHO * VOL * GRAVITY / LPP,
-            1.212 * GRAVITY / LPP,
-            0.056 * RHO * VOL * np.sqrt(GRAVITY * LPP),
-            0.056 * RHO * VOL * np.sqrt(GRAVITY * LPP),
-            0.0601 * RHO * VOL * np.sqrt(GRAVITY * LPP)
-            ])).tolist()
-        Iz = MASS / VOL * VIz
-
-        ## Inertia Matrix
-        MRB = np.array([
-            [MASS, 0, 0],
-            [0, MASS, MASS*rg[0]],
-            [0, MASS*rg[0], Iz]
-        ])
-        MA = np.array([
-            [-Xudot, 0, 0],
-            [0, -Yvdot, -Yrdot],
-            [0, -Yrdot, -Nvdot]
-        ])
-        self.Minv = np.linalg.inv(MA + MRB)
-
-        ## Coriolis-Centripetal Matrix
-        CRB = lambda nu : np.array([
-            [0, 0, -MASS * (rg[0]*nu[2] + nu[1])],
-            [0, 0, MASS * nu[0]],
-            [MASS * (rg[0]*nu[2] + nu[1]), -MASS * nu[0], 0]
-        ])
-        CA = lambda nu : np.array([
-            [0, 0, Yvdot * nu[1] + Yrdot * nu[2]],
-            [0, 0, -Xudot * nu[0]],
-            [-Yvdot * nu[1]-Yrdot * nu[2], Xudot * nu[0], 0]
-        ])
-        self.C = lambda nu : CA(nu) + CRB(nu)
-
-        ## Damping Matrix
-        self.D = np.array([
-            [-Xu, 0, 0],
-            [0, -Yv, -Yr],
-            [0, -Nv, -Nr]
-        ])
-
         ## Actuators
-        self.actuator_params = RevoltThrusterParameters()
-        self.T = lambda alpha, lx, ly : np.array([
-            ca.cos(alpha),
-            ca.sin(alpha),
-            lx*ca.sin(alpha) - ly * ca.cos(alpha)
-        ])
         self.lx = self.actuator_params.xy[:, 0]
         self.ly = self.actuator_params.xy[:, 1]
+        self.T = self.actuator_params.T
 
         # Force constraints
         self.lbf = self.actuator_params.f_min
         self.ubf = self.actuator_params.f_max
 
         # Angle constraints
-        self.lba = np.array([-np.pi, -np.pi, -np.pi])
-        self.uba = np.array([np.pi, np.pi, np.pi])
+        self.lba = self.actuator_params.lba
+        self.uba = self.actuator_params.uba
 
         # Complete command constraints
         self.lbu = np.concatenate([self.lbf, self.lba])
         self.ubu = np.concatenate([self.ubf, self.uba])
 
         # Time constant
-        self.actuators_time_constant = np.array(3*[self.actuator_params.T_n] + 3*[self.actuator_params.T_a])
+        self.actuators_time_constant = self.actuator_params.time_constant
+        self.actuators_dt = np.array([min(time_constant, self.dt) for time_constant in self.actuator_params.time_constant])
         
         self.init_nlp()
 
@@ -153,6 +103,8 @@ class MPCPathTrackingRevolt(IControl):
         """
         Compute the total generalized force based on thruster's forces and azimuth angles
         """
+
+        # This should be in the actuator configuration, as a single matrix
         tau_a = ca.SX([0., 0., 0.])
         for i in range(3): 
             tau_a += self.T(uk[i+3], self.lx[i], self.ly[i]) * uk[i]
@@ -168,13 +120,15 @@ class MPCPathTrackingRevolt(IControl):
         # Actuators
         tau_a = self.actuators_dynamics(uk, *args, **kwargs)
 
-        # Dynamics
-        nu_dot = self.Minv @ (
+        # Vessel dynamics
+        nu_dot = self.vessel_params.Minv @ (
             tau_a -
             self.tau_ext -
-            self.C(xk[3:6]) @ xk[3:6] +
-            self.D @ xk[3:6]
+            self.vessel_params.CRB(xk[3:6]) @ xk[3:6] -
+            self.vessel_params.CA(xk[3:6]) @ xk[3:6] +
+            self.vessel_params.D @ xk[3:6]
         )
+        # nu_dot = self.vessel_params.dynamics(xk, tau_a-self.tau_ext)
 
         # Euler integration
         nukp1 = xk[3:6] + nu_dot * self.dt
@@ -194,7 +148,7 @@ class MPCPathTrackingRevolt(IControl):
         return 50 * self.__lagrange__(xf, np.zeros((self.Nu,)), pf_des, *args, sk=sf, **kwargs)
 
     def __format_commands__(self, commands:np.ndarray) -> List[np.ndarray]:
-        return [command for command in commands]
+        return [(commands[i+3], commands[i]/self.actuator_params.k_pos[i] if commands[i] >= 0 else -np.sqrt(-commands[i]/self.actuator_params.k_neg[i])) for i in range(3)]
 
     def set_dynamic_constraints(self, *args, **kwargs) -> None:
         """
@@ -208,7 +162,7 @@ class MPCPathTrackingRevolt(IControl):
         
         # Consider time constant for actuator dynamics
         for k in range(0, self.horizon-1):
-            self.dynamic_actuator_constraints = ca.vertcat(self.dynamic_actuator_constraints, self.get_u_actual(k+1) - self.get_u_actual(k) - self.dt * (self.get_u_setpoint(k+1) - self.get_u_actual(k)) / self.actuators_time_constant)
+            self.dynamic_actuator_constraints = ca.vertcat(self.dynamic_actuator_constraints, self.get_u_actual(k+1) - self.get_u_actual(k) - self.actuators_dt * (self.get_u_setpoint(k+1) - self.get_u_actual(k)) / self.actuators_time_constant)
 
         self.LBDynamics = np.array([self.Nx*[0.0]]).repeat(self.horizon + 1, axis=0).flatten().tolist() # Lower Bound Dynamics, including 0 <= x(0) - x0 <= 0
         self.UBDynamics = np.array([self.Nx*[0.0]]).repeat(self.horizon + 1, axis=0).flatten().tolist() # Upper Bound Dynamics, including 0 <= x(0) - x0 <= 0
@@ -238,7 +192,6 @@ class MPCPathTrackingRevolt(IControl):
         self.set_states_and_commands_constraints(*args, **kwargs)   # x_k \in X, u_k \in U
         self.set_dynamic_constraints(*args, **kwargs)               # x_k+1 = f(x_k, u_k) || Time constant for actuators
 
-        # Initialize NLP  
 
     def set_cost(self, path:List[Tuple[float, float, float]], *args, **kwargs) -> None:
         """
@@ -250,23 +203,32 @@ class MPCPathTrackingRevolt(IControl):
             self.cost += self.__lagrange__(xk, uk, path[k], *args, k=k, **kwargs)
         self.cost += self.__mayer__(self.get_x(k+1), path[k+1], *args, **kwargs)
 
-    def get_initial_guess(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, **kwargs) -> Tuple[ca.DM, ca.DM]:        
-        x_prev = x0.copy()
-        X0 = x_prev
+    def get_initial_guess(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, mode:Literal['constant input', 'previous solution']='previous solution', **kwargs) -> Tuple[ca.DM, ca.DM]:        
+        match mode:
+            case 'constant input':
+                x_prev = x0.copy()
+                X0 = x_prev
 
-        U0Actual = []
-        for _ in range(0, self.horizon):
-            x = self.dynamics(x_prev, u_prev_actual)
-            X0 = ca.vertcat(X0, x)
-            U0Actual = ca.vertcat(U0Actual, u_prev_actual)
+                U0Actual = []
+                for _ in range(0, self.horizon):
+                    x = self.dynamics(x_prev, u_prev_actual)
+                    X0 = ca.vertcat(X0, x)
+                    U0Actual = ca.vertcat(U0Actual, u_prev_actual)
 
-        return ca.DM(ca.vertcat(X0, U0Actual, U0Actual)) # Assumption: Actual command = setpoint (steady state)
+                return ca.DM(ca.vertcat(X0, U0Actual, U0Actual)) # Assumption: Actual command = setpoint (steady state)
+            case 'previous solution':
+                if self.XOpt is None:
+                    return self.get_initial_guess(x0, u_prev_actual, *args, mode='constant input', **kwargs)
+                X0 = ca.vertcat(self.XOpt[1::].reshape(-1), self.dynamics(self.XOpt[-1], self.UActualOpt[-1])) # Assume N-th input is equal to N-1-th input
+                U0Actual = ca.vertcat(self.UActualOpt[1::].reshape(-1), self.UActualOpt[-1])
+                U0Setpoint = ca.vertcat(self.USetpointOpt[1::].reshape(-1), self.USetpointOpt[-1])
+                return ca.DM(ca.vertcat(X0, U0Actual, U0Setpoint))
 
     def set_initial_constraints(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, **kwargs) -> None:       
         self.dynamic_constraints[0:self.Nx] = self.get_x(0) - x0 # Replace first constraint
-        self.dynamic_actuator_constraints[0:self.Nu] = self.get_u_actual(0) - u_prev_actual - self.dt * (self.get_u_setpoint(0) - u_prev_actual) / self.actuators_time_constant 
+        self.dynamic_actuator_constraints[0:self.Nu] = self.get_u_actual(0) - u_prev_actual - self.actuators_dt * (self.get_u_setpoint(0) - u_prev_actual) / self.actuators_time_constant 
 
-    def solve(self, initial_guess, options:dict={'ipopt.print_level':5, 'print_time':0}, *args, **kwargs) -> Dict:
+    def solve(self, initial_guess, options:dict={'ipopt.print_level':0, 'print_time':0}, *args, **kwargs) -> Dict:
         nlp = {
             "x": ca.vertcat(self.X, self.UActual, self.USetpoint),
             "f": self.cost,
@@ -291,53 +253,22 @@ class MPCPathTrackingRevolt(IControl):
         self.USetpointOpt = X[self.Nx*(self.horizon+1) + self.Nu*self.horizon: self.Nx*(self.horizon+1) + 2*self.Nu*self.horizon].reshape(-1, self.Nu)
         self.DynamicsConstraintsOpt = g[0:(self.horizon+1)*self.Nx]
         self.ActuatorDynamicsConstraintsOpt = g[(self.horizon+1)*self.Nx:(self.horizon+1)*self.Nx+self.horizon*self.Nu]
-
-        print("XOpt: ", self.XOpt)
-        print("\n")
-        print("UActualOpt: ", self.UActualOpt)
-        print("\n")
-        print("USetpointOpt: ", self.USetpointOpt)
-        print("\n")
-        print("DynamicsConstraintsOpt: ", self.DynamicsConstraintsOpt)
-        print("\n")
-        print("ActuatorDynamicsConstraintsOpt: " , self.ActuatorDynamicsConstraintsOpt)
-
-
-        # self.get_u_actual(k+1) - self.get_u_actual(k) - self.dt * (self.get_u_setpoint(k+1) - self.get_u_actual(k)) / self.actuators_time_constant)
-        # print("CONS: ", self.UActualOpt - self.dt * (self.USetpointOpt) / self.actuators_time_constant)
-        print(self.actuators_time_constant)
-        # print(arr)
-        # self.Xopt = arr[0:(self.horizon+1)*self.Nx].reshape((self.horizon+1, self.Nx)).T
-        # self.Uopt = arr[(self.horizon+1)*self.Nx:].reshape((self.horizon, self.Nu)).T
-
-        # # Remove last constraint (i.e. x[0] = x0) after solve is done, since it will change for next nlp
-        # self.G = self.G[0:-self.Nx]
-        # self.LBG = self.LBG[0:-self.Nx]
-        # self.UBG = self.UBG[0:-self.Nx] 
-
-
-        """
-        
-        UOPT MUST BE TAKEN FROM THE SETPOINT COMMAND VECTOR !!!
-        BECAUSE THE TRUE INPUT TO THE SYSTEM ARE SETPOINT!!!
-        
-        """
-
-        return {}
+        return solver_out
 
     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, path:List[Tuple[float, float, float]], *args, initial_guess=None, u_prev_actual:np.ndarray=None, **kwargs) -> List[np.ndarray]:
-        x0 = np.concatenate([eta, nu])
+        x0 = np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]])
         if self.u_prev_actual is None:
             if u_prev_actual is None:
                 u_prev_actual = np.array(self.Nu * [0.0])
         else:
             u_prev_actual = self.u_prev_actual.copy()
 
+        # path = self.path.get_target_wpts_from(eta[0], eta[1], 0.1, self.horizon+1)
         initial_guess = initial_guess or self.get_initial_guess(x0, u_prev_actual, *args, **kwargs)
         self.set_cost(path, *args, **kwargs) # stage & terminal cost
         self.set_initial_constraints(x0, u_prev_actual, *args, **kwargs)
         self.solve(initial_guess, *args, **kwargs) # Solve for X, U, V
-        return self.__format_commands__(self.u_prev_setpoint, *args, **kwargs)
+        return self.__format_commands__(self.u_prev_setpoint, *args, **kwargs), {'horizon': self.horizon}
     
     def reset(self):
         pass
@@ -354,14 +285,14 @@ class MPCPathTrackingRevolt(IControl):
     @property
     def u_prev_actual(self) -> np.ndarray:
         if self.UActualOpt is not None:
-            return self.UActualOpt[0:self.Nu]
+            return self.UActualOpt[0]
         else:
             return None
         
     @property
     def u_prev_setpoint(self) -> np.ndarray:
         if self.USetpointOpt is not None:
-            return self.USetpointOpt[0:self.Nu]
+            return self.USetpointOpt[0]
         else:
             return None
         
@@ -501,17 +432,25 @@ class MPCPathTrackingRevolt(IControl):
 
     
 def test() -> None:
+    from python_vehicle_simulator.vehicles.revolt3 import RevoltParameters3DOF, RevoltThrusterParameters
     mpc = MPCPathTrackingRevolt(
+        RevoltParameters3DOF(),
+        RevoltThrusterParameters(),
         horizon=200,
         dt=0.05
     )
-    # print(mpc.LBA, mpc.UBA, mpc.LBF, mpc.UBF, mpc.LBX, mpc.UBX)
-    # print(mpc.dynamics(np.array(6*[0.0]), np.array(6*[100])))
-    # print(mpc.get_initial_guess(np.array([0., 0., 0., 0., 0., 0.]), u_prev_actual=np.array([20, 50, 50, 0.1, 0.4, 0.5])))
-    mpc.__get__(None, None, np.array(3*[0.0]), np.array(3*[0.0]), None, None, None, None, np.array([(mpc.horizon+1)*(2, 0.5, np.pi/2)]).reshape(-1, 3).tolist())
+
+    mpc(None, None, np.array(3*[0.0]), np.array(3*[0.0]), None, None, None, None, np.array([(mpc.horizon+1)*(2, 0.5, np.pi/2)]).reshape(-1, 3).tolist())
+    # mpc(None, None, np.array(3*[1.0]), np.array(3*[0.0]), None, None, None, None, np.array([(mpc.horizon+1)*(2, 0.5, np.pi/2)]).reshape(-1, 3).tolist())
+    # mpc(None, None, np.array(3*[-1.0]), np.array(3*[0.0]), None, None, None, None, np.array([(mpc.horizon+1)*(2, 0.5, np.pi/2)]).reshape(-1, 3).tolist())
+
     # 
     mpc.animate_heading()
     mpc.plot_results()
+
+def test_full_system() -> None:
+    from python_vehicle_simulator.vehicles.revolt3 import RevoltParameters3DOF, RevoltThrusterParameters
+
 
 if __name__ == "__main__":
     test()

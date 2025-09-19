@@ -12,6 +12,8 @@ from typing import List, Dict, Tuple
 from copy import deepcopy
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from python_vehicle_simulator.utils.math_fn import Rzyx
+from python_vehicle_simulator.lib.filter import LowPass
+from python_vehicle_simulator.lib.kalman import EKFRevolt3
 
 
 class INavigation(IDrawable, ABC):
@@ -63,7 +65,7 @@ class Navigation(INavigation):
         super().__init__({}, *args, **kwargs)
 
     def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[Dict, Dict]:
-        return super().__get__(eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs), {}
+        return super().__get__(eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
     
     def reset(self):
         pass
@@ -126,6 +128,166 @@ class NavigationTOF(INavigation):
         tof_points_in_body = self.last_info["points"]
         tof_in_ned = (Rzyx(*eta[3:6])[0:2,0:2] @ tof_points_in_body.T + eta[0:2, None]).T
         ax.scatter(tof_in_ned[:, 1], tof_in_ned[:, 0], c='red')
+        return ax
+
+    def __fill__(self, ax:Axes, *args, **kwargs) -> Axes:
+        return ax
+    
+class NavigationWithNoise(INavigation):
+    def __init__(
+            self, 
+            *args,
+            offset=None,
+            std=None,
+            **kwargs
+    ):
+        super().__init__([], *args, **kwargs)
+        if offset is None:
+            self.offset = {
+                'eta': (np.random.random(size=(6,))-0.5) * 2 * 0.0, # [-1, 1] * 0.5
+                'nu': (np.random.random(size=(6,))-0.5) * 2 * 0.0 # [-1, 1] * 0.1
+            }
+
+        if std is None:
+            self.std = {
+                'eta': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.5, # [-1, 1] * 0.2 
+                'nu': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.1 # [-1, 1] * 0.1
+            }
+            self.std['eta'][5] = 0.05
+
+        self.n_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
+        self.e_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
+        self.y_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
+        self.u_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
+        self.v_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
+        self.r_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
+        
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[Dict, Dict]:
+        """
+        
+        """
+        
+        eta = eta + np.random.normal(loc=self.offset['eta'], scale=self.std['eta'])
+        nu = nu + np.random.normal(loc=self.offset['nu'], scale=self.std['nu'])
+        eta = np.array([
+            self.n_filter(eta[0]),
+            self.e_filter(eta[1]),
+            0., 0., 0.,
+            self.y_filter(eta[5])
+        ])
+        nu = np.array([
+            self.u_filter(nu[0]),
+            self.v_filter(nu[1]),
+            0., 0., 0.,
+            self.r_filter(nu[5])
+        ])
+
+        observation = {
+            "eta": eta,
+            "nu": nu,
+            "current": current,
+            "wind": wind,
+            "obstacles": obstacles,
+            "target_vessels": target_vessels,
+        }
+
+        info = {}
+        return observation, info
+    
+    def reset(self):
+        pass
+
+    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+        if self.last_observation is None:
+            return ax
+        
+        eta = self.last_observation["eta"]
+        ax.scatter(eta[1], eta[0], c='purple')
+        return ax
+
+    def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:
+        if self.last_observation is None:
+            return ax
+        
+        eta = self.last_observation["eta"]
+        ax.scatter(eta[1], eta[0], c='purple')
+        return ax
+
+    def __fill__(self, ax:Axes, *args, **kwargs) -> Axes:
+        return ax
+
+class NavigationRevolt3WithEKF(INavigation):
+    def __init__(
+            self,
+            x0:np.ndarray,
+            dt:float,
+            *args,
+            Q:np.ndarray = np.eye(6)*1e-5,
+            R:np.ndarray = np.eye(6)*0.25,
+            P0:np.ndarray = np.eye(6),
+            offset=None,
+            std=None,
+            **kwargs
+    ):
+        super().__init__([], *args, **kwargs)
+        if offset is None:
+            self.offset = {
+                'eta': (np.random.random(size=(6,))-0.5) * 2 * 0.0, # [-1, 1] * 0.5
+                'nu': (np.random.random(size=(6,))-0.5) * 2 * 0.0 # [-1, 1] * 0.1
+            }
+
+        if std is None:
+            self.std = {
+                'eta': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.5, # [-1, 1] * 0.2 
+                'nu': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.1 # [-1, 1] * 0.1
+            }
+            self.std['eta'][5] = 0.05
+
+        self.ekf = EKFRevolt3(Q=Q, R=R, x0=x0, P0=P0, dt=dt)
+        
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, tau_actuators_prev:np.ndarray=None, **kwargs) -> Tuple[Dict, Dict]:
+        """
+        
+        """
+        if tau_actuators_prev is None:
+            tau_actuators_prev = np.array([0., 0., 0., 0., 0., 0.])
+
+        # Measurement
+        eta = eta + np.random.normal(loc=self.offset['eta'], scale=self.std['eta'])
+        nu = nu + np.random.normal(loc=self.offset['nu'], scale=self.std['nu'])
+        
+        # Filtering
+        x = self.ekf(np.array([tau_actuators_prev[0], tau_actuators_prev[1], tau_actuators_prev[5]]), np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]]))
+
+        observation = {
+            "eta": np.array([x[0], x[1], 0, 0, 0, x[2]]),
+            "nu": np.array([x[3], x[4], 0, 0, 0, x[5]]),
+            "current": current,
+            "wind": wind,
+            "obstacles": obstacles,
+            "target_vessels": target_vessels,
+        }
+
+        info = {}
+        return observation, info
+    
+    def reset(self):
+        pass
+
+    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+        if self.last_observation is None:
+            return ax
+        
+        eta = self.last_observation["eta"]
+        ax.scatter(eta[1], eta[0], c='purple')
+        return ax
+
+    def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:
+        if self.last_observation is None:
+            return ax
+        
+        eta = self.last_observation["eta"]
+        ax.scatter(eta[1], eta[0], c='purple')
         return ax
 
     def __fill__(self, ax:Axes, *args, **kwargs) -> Axes:

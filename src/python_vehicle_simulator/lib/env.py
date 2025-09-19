@@ -18,6 +18,7 @@ class NavEnv:
             render_mode:Literal["human", "rgb_array"]=None,
             verbose:bool=0,
             skip_frames:int=0,
+            window_size = (20, 20),
             **kwargs
     ):
         self.own_vessel = own_vessel
@@ -44,6 +45,7 @@ class NavEnv:
         self.ax = None
         self.vessel_plot = None
         self.verbose = verbose
+        self.window_size = window_size
         
 
     def reset(self):
@@ -81,7 +83,7 @@ class NavEnv:
         obs, r, term, trunc, info, done = self.own_vessel.step(self.current, self.wind, self.obstacles, self.target_vessels, *args, **kwargs)
 
         # Rendering
-        if (self.t//self.dt) % (self.skip_frames) == 0:
+        if self.skip_frames == 0 or (self.t//self.dt) % (self.skip_frames) == 0:
             self.render(self.render_mode, verbose=self.verbose)
 
         # Time travel
@@ -120,14 +122,14 @@ class NavEnv:
             # self.vessel_plot.set_data(*geometry[0:2])
             # self.vessel_plot.set_3d_properties(geometry[2])
         else:
-            self.own_vessel.plot(ax=self.ax, verbose=verbose, c='blue')
+            self.own_vessel.plot(ax=self.ax, verbose=verbose, c='black')
             for obs in self.obstacles:
                 obs.plot(ax=self.ax, verbose=verbose, c='grey')
             for tv in self.target_vessels:
                 tv.plot(ax=self.ax, verbose=verbose, c='red')
             # self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
-        self.ax.set_xlim([self.own_vessel.eta[1]-50, self.own_vessel.eta[1]+50])
-        self.ax.set_ylim([self.own_vessel.eta[0]-50, self.own_vessel.eta[0]+50])
+        self.ax.set_xlim([self.own_vessel.eta[1]-self.window_size[0]/2, self.own_vessel.eta[1]+self.window_size[0]/2])
+        self.ax.set_ylim([self.own_vessel.eta[0]-self.window_size[1]/2, self.own_vessel.eta[0]+self.window_size[1]/2])
         self.ax.set_xlabel('East')
         self.ax.set_ylabel('North')
         self.ax.set_title(f"Vessel Position (t={self.t:.1f})")

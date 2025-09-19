@@ -34,7 +34,7 @@ class IControl(ABC):
 
     @abstractmethod
     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
-        return []
+        return [], {}
     
     @abstractmethod
     def reset(self):
@@ -89,7 +89,7 @@ class UserInputControlTwoTrusters(Control):
         for key in self.hashmap.keys():
             if keyboard.is_pressed(key):
                 self.u = [np.array(ui) for ui in self.hashmap[key]]
-        return self.u
+        return self.u, {}
 
 class HeadingAutopilotTwoThrusters(IControl):
     def __init__(
@@ -127,7 +127,7 @@ class HeadingAutopilotTwoThrusters(IControl):
         # u = self.two_thrusters_control_allocation(tau_x, tau_n)
         u = self.controlAllocation(tau_x, tau_n)
         # print(u)
-        return u
+        return u, {}
     
     def reset(self):
         self.psi_d = 0.0

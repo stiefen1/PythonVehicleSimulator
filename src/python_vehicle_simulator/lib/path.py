@@ -19,6 +19,7 @@ class PWLPath(IDrawable):
         self.waypoints = np.array(waypoints)
         self.length = shapely.LineString(self.waypoints).length
         self.init_heading()
+        self.prev_target_wpts = []
 
     def init_heading(self) -> None:
         self.heading = []
@@ -59,10 +60,13 @@ class PWLPath(IDrawable):
             else:
                 heading = math.atan2(p_next.y-p_n.y, p_next.x-p_n.x)
             target_wpts.append((p_n.x, p_n.y, heading))
+        self.prev_target_wpts = target_wpts
         return target_wpts        
 
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
-        ax.plot(self.waypoints[:, 1], self.waypoints[:, 0], *args, **kwargs)
+    def __plot__(self, ax:Axes, *args, c='black', **kwargs) -> Axes:
+        ax.plot(self.waypoints[:, 1], self.waypoints[:, 0], '--', *args, c=c, **kwargs)
+        for wpt in self.prev_target_wpts:
+            ax.scatter(wpt[1], wpt[0], c='red')
         return ax
 
     def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:

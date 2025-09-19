@@ -28,11 +28,12 @@ class IActuator(ABC):
 
     ):
         self.xy = np.array(xy)
+        self.orientation = orientation
         self.u_0 = np.array(u_0) # initial command
         self.u_min = np.array(u_min)
         self.u_max = np.array(u_max)
         self.dim = len(u_0)
-        self.time_const = np.array(time_const) or np.array(self.dim * [float('inf')])
+        self.time_const = np.array(time_const) if time_const is not None else np.array(self.dim * [float('inf')])
         self.u_prev = np.array(u_0)
         self.f_min = np.array(f_min)
         self.f_max = np.array(f_max)
@@ -87,7 +88,43 @@ class Thruster(IActuator):
         
         return
 
+class AzimuthThruster(IActuator):
+    def __init__(
+            self,
+            xy:Tuple,
+            k_pos:float,    # speed-thrust quad. mapping > 0 (n>=0)
+            k_neg:float,    # speed-thrust quad. mapping > 0 (n<0)
+            n_min:float,    # Min propeller speed (can be negative)
+            n_max:float,    # Max propeller speed
+            a_min:float,
+            a_max:float,
+            *args,
+            alpha_0:float=0.0,
+            n_0:float=0.0,  # initial propeller speed (rad/s)
+            T_a:float=1.0,  # Time constant
+            T_n:float=1.0,
+            f_max:float=float('inf'),
+            f_min:float=-float('inf'),
+            orientation:float=0.0,
+            **kwargs
+    ):
+        super().__init__(xy=xy, orientation=orientation, u_0=(alpha_0, n_0), u_min=(a_min, n_min), u_max=(a_max, n_max), *args, time_const=(T_a, T_n), f_min=(f_min,), f_max=(f_max,), **kwargs)
+        self.k_pos = k_pos
+        self.k_neg = k_neg
 
+    def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
+        """
+        u: azimuth, speed
+        """
+        f = np.clip(self.k_pos * u[1]**2 if u[1]>=0 else -self.k_neg * u[1]**2, self.f_min, self.f_max)
+        return np.array([
+                np.cos(self.orientation + u[0]),
+                np.sin(self.orientation + u[0]),
+                0,
+                0,
+                0,
+                self.xy[0] * np.sin(self.orientation + u[0]) - self.xy[1] * np.cos(self.orientation + u[0])
+            ]) * f
             
 
 class fin:

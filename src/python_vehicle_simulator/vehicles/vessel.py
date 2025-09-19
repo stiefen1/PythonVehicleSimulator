@@ -64,6 +64,7 @@ class IVessel(IDrawable):
         self.initial_geometry = VESSEL_GEOMETRY(self.params.loa, self.params.beam)
         self.name = name
         self.mmsi = mmsi
+        self.tau_actuators_prev = None
 
     @abstractmethod
     def __dynamics__(self, tau_actuators:np.ndarray, current:Current, wind:Wind, *args, **kwargs) -> np.ndarray:
@@ -84,20 +85,19 @@ class IVessel(IDrawable):
         """
         # GNC
         ## Navigation: measure environments
-        measurements, info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
-
+        measurements, navigation_info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels, tau_actuators_prev=self.tau_actuators_prev) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
+        # print("meas and info: ", measurements, info)
         # control_commands can be devised by an RL agent for example.
         if control_commands is None:
             ## Guidance: Get desired states
-            eta_des, nu_des = self.guidance(**measurements)
+            eta_des, nu_des, guidance_info = self.guidance(**measurements, **navigation_info)
             ## Control: Generate action to track desired states
-            control_commands = self.control(eta_des, nu_des, **measurements)
+            control_commands, control_info = self.control(eta_des, nu_des, **measurements, **navigation_info, **guidance_info)
 
         # Actuators
         tau_actuators = np.zeros((6,), float)
         for actuator, control_command in zip(self.actuators, control_commands):
             tau_actuators = tau_actuators + actuator.dynamics(control_command, self.nu.to_numpy(), current, self.dt)
-        # print("tau_a: ", tau_actuators)
 
         # USV Dynamics
         nu_dot = self.__dynamics__(tau_actuators, current, wind, *args, **kwargs)
@@ -110,6 +110,7 @@ class IVessel(IDrawable):
         eta = Euler(self.eta.to_numpy(), eta_dot, self.dt)
         
         self.eta, self.nu = Eta(*eta), Nu(*nu)
+        self.tau_actuators_prev = tau_actuators.copy()
         return (measurements, 0, False, False, {}, False)
     
     def reset(self):
@@ -136,6 +137,7 @@ class IVessel(IDrawable):
         if isinstance(ax, Axes3D):
             ax.plot3D(*self.geometry_for_3D_plot, *args, **kwargs)
         else:
+            ax.scatter(self.eta[1], self.eta[0], *args, **kwargs)
             ax.plot(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
 

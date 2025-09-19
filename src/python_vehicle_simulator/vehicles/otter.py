@@ -294,26 +294,6 @@ class Otter(IVessel):
         nu_dot = Dnu_c + np.matmul(self.params.Minv, sum_tau)
 
         return nu_dot
-    
-
-
-    def stepInput(self, t):
-        """
-        u = stepInput(t) generates propeller step inputs.
-        """
-        n1 = 100  # rad/s
-        n2 = 80
-
-        if t > 30 and t < 100:
-            n1 = 80
-            n2 = 120
-        else:
-            n1 = 0
-            n2 = 0
-
-        u_control = np.array([n1, n2], float)
-
-        return u_control
 
 
 if __name__ == "__main__":
