@@ -19,17 +19,22 @@ from python_vehicle_simulator.lib.kalman import EKFRevolt3
 class INavigation(IDrawable, ABC):
     def __init__(
             self,
+            eta:np.ndarray,
+            nu:np.ndarray,
             sensors:Dict[str, ISensor],
             *args,
             **kwargs
     ):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
         self.sensors = sensors
+        self.prev = {"eta": eta.copy(), "nu": nu.copy(), "current": None, "wind": None, "obstacles": None, "target_vessels": None, 'info': None}
         self.last_observation = None
         self.last_info = None
 
     def __call__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[Dict, Dict]:
         self.last_observation, self.last_info = self.__get__(eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+        self.prev = self.last_observation
+        self.prev.update({'info':self.last_info})
         return self.last_observation, self.last_info
 
     @abstractmethod
@@ -58,11 +63,13 @@ class INavigation(IDrawable, ABC):
 
 class Navigation(INavigation):
     def __init__(
-            self, 
+            self,
+            eta:np.ndarray,
+            nu:np.ndarray, 
             *args,
             **kwargs
     ):
-        super().__init__({}, *args, **kwargs)
+        super().__init__(eta, nu, {}, *args, **kwargs)
 
     def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[Dict, Dict]:
         return super().__get__(eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
@@ -73,11 +80,15 @@ class Navigation(INavigation):
 class NavigationTOF(INavigation):
     def __init__(
             self, 
+            eta:np.ndarray,
+            nu:np.ndarray, 
             tof_params:dict={"range":30.0, "angles":np.linspace(-45*DEG2RAD, 45*DEG2RAD, 6), "noise":NoNoise()},
             *args,
             **kwargs
     ):
         super().__init__(
+            eta, 
+            nu,
             {
                 'tof': TOFArray(**tof_params)
             },
@@ -136,12 +147,14 @@ class NavigationTOF(INavigation):
 class NavigationWithNoise(INavigation):
     def __init__(
             self, 
+            eta:np.ndarray,
+            nu:np.ndarray,
             *args,
             offset=None,
             std=None,
             **kwargs
     ):
-        super().__init__([], *args, **kwargs)
+        super().__init__(eta, nu, [], *args, **kwargs)
         if offset is None:
             self.offset = {
                 'eta': (np.random.random(size=(6,))-0.5) * 2 * 0.0, # [-1, 1] * 0.5
@@ -155,12 +168,12 @@ class NavigationWithNoise(INavigation):
             }
             self.std['eta'][5] = 0.05
 
-        self.n_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
-        self.e_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
-        self.y_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
-        self.u_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
-        self.v_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
-        self.r_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=0.0)
+        self.n_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=eta[0])
+        self.e_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=eta[1])
+        self.y_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=eta[5])
+        self.u_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=nu[0])
+        self.v_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=nu[1])
+        self.r_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=nu[5])
         
     def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[Dict, Dict]:
         """
@@ -219,7 +232,8 @@ class NavigationWithNoise(INavigation):
 class NavigationRevolt3WithEKF(INavigation):
     def __init__(
             self,
-            x0:np.ndarray,
+            eta:np.ndarray,
+            nu:np.ndarray,
             dt:float,
             *args,
             Q:np.ndarray = np.eye(6)*1e-5,
@@ -229,7 +243,7 @@ class NavigationRevolt3WithEKF(INavigation):
             std=None,
             **kwargs
     ):
-        super().__init__([], *args, **kwargs)
+        super().__init__(eta, nu, [], *args, **kwargs)
         if offset is None:
             self.offset = {
                 'eta': (np.random.random(size=(6,))-0.5) * 2 * 0.0, # [-1, 1] * 0.5
@@ -238,26 +252,26 @@ class NavigationRevolt3WithEKF(INavigation):
 
         if std is None:
             self.std = {
-                'eta': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.5, # [-1, 1] * 0.2 
+                'eta': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.5, # [-1, 1] * 0.5 
                 'nu': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.1 # [-1, 1] * 0.1
             }
             self.std['eta'][5] = 0.05
 
-        self.ekf = EKFRevolt3(Q=Q, R=R, x0=x0, P0=P0, dt=dt)
+        self.ekf = EKFRevolt3(Q=Q, R=R, x0=np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]]), P0=P0, dt=dt)
         
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, tau_actuators_prev:np.ndarray=None, **kwargs) -> Tuple[Dict, Dict]:
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, tau_actuators:np.ndarray=None, **kwargs) -> Tuple[Dict, Dict]:
         """
         
         """
-        if tau_actuators_prev is None:
-            tau_actuators_prev = np.array([0., 0., 0., 0., 0., 0.])
+        if tau_actuators is None:
+            tau_actuators = np.array([0., 0., 0., 0., 0., 0.])
 
         # Measurement
         eta = eta + np.random.normal(loc=self.offset['eta'], scale=self.std['eta'])
         nu = nu + np.random.normal(loc=self.offset['nu'], scale=self.std['nu'])
         
         # Filtering
-        x = self.ekf(np.array([tau_actuators_prev[0], tau_actuators_prev[1], tau_actuators_prev[5]]), np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]]))
+        x = self.ekf(np.array([tau_actuators[0], tau_actuators[1], tau_actuators[5]]), np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]]))
 
         observation = {
             "eta": np.array([x[0], x[1], 0, 0, 0, x[2]]),

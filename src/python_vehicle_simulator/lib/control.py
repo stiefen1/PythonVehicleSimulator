@@ -27,10 +27,12 @@ class IControl(ABC):
             *args,
             **kwargs
     ):
-        pass
+        self.prev = {'u': None, 'info': None}
 
     def __call__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
-        return self.__get__(eta_des, nu_des, eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+        u, info = self.__get__(eta_des, nu_des, eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+        self.prev = {'u': u, 'info': info}
+        return u, info
 
     @abstractmethod
     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:

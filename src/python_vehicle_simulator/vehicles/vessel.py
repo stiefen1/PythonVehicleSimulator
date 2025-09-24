@@ -11,6 +11,7 @@ from python_vehicle_simulator.utils.math_fn import Rzyx, Tzyx
 from python_vehicle_simulator.lib.weather import Wind, Current
 from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.lib.actuator import IActuator
+from python_vehicle_simulator.lib.diagnosis import IDiagnosis, Diagnosis
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -44,6 +45,7 @@ class IVessel(IDrawable):
             guidance:IGuidance=None,
             navigation:INavigation=None,
             control:IControl=None,
+            diagnosis:IDiagnosis=None,
             actuators:List[IActuator]=None,
             name:str='IVessel',
             mmsi:str=None, # Maritime Mobile Service Identity number
@@ -58,13 +60,15 @@ class IVessel(IDrawable):
         self._eta_0 = deepcopy(self.eta)
         self._nu_0 = deepcopy(self.nu)
         self.guidance = guidance or Guidance()
-        self.navigation = navigation or Navigation()
+        self.navigation = navigation or Navigation(self.eta.to_numpy(), self.nu.to_numpy())
         self.control = control or Control()
+        self.diagnosis = diagnosis or Diagnosis(eta=self.eta.to_numpy(), nu=self.nu.to_numpy(), params=None, dt=self.dt)
         self.actuators = actuators or []
         self.initial_geometry = VESSEL_GEOMETRY(self.params.loa, self.params.beam)
         self.name = name
         self.mmsi = mmsi
-        self.tau_actuators_prev = None
+        self.tau_actuators = None
+        self.control_commands_prev = None
 
     @abstractmethod
     def __dynamics__(self, tau_actuators:np.ndarray, current:Current, wind:Wind, *args, **kwargs) -> np.ndarray:
@@ -85,19 +89,23 @@ class IVessel(IDrawable):
         """
         # GNC
         ## Navigation: measure environments
-        measurements, navigation_info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels, tau_actuators_prev=self.tau_actuators_prev) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
+        measurements, navigation_info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels, tau_actuators=self.tau_actuators) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
         # print("meas and info: ", measurements, info)
         # control_commands can be devised by an RL agent for example.
         if control_commands is None:
+            ## Fault Diagnosis
+            diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info, u_actual=[actuator.info for actuator in self.actuators])
             ## Guidance: Get desired states
-            eta_des, nu_des, guidance_info = self.guidance(**measurements, **navigation_info)
+            eta_des, nu_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info)
             ## Control: Generate action to track desired states
-            control_commands, control_info = self.control(eta_des, nu_des, **measurements, **navigation_info, **guidance_info)
+            control_commands, control_info = self.control(eta_des, nu_des, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info)
 
         # Actuators
         tau_actuators = np.zeros((6,), float)
-        for actuator, control_command in zip(self.actuators, control_commands):
-            tau_actuators = tau_actuators + actuator.dynamics(control_command, self.nu.to_numpy(), current, self.dt)
+        for i, (actuator, control_command) in enumerate(zip(self.actuators, control_commands)):
+            tau_i = actuator.dynamics(control_command, self.nu.to_numpy(), current, self.dt)
+            tau_actuators = tau_actuators + tau_i
+            # print(f"tau {i}: {tau_i}")
 
         # USV Dynamics
         nu_dot = self.__dynamics__(tau_actuators, current, wind, *args, **kwargs)
@@ -110,7 +118,7 @@ class IVessel(IDrawable):
         eta = Euler(self.eta.to_numpy(), eta_dot, self.dt)
         
         self.eta, self.nu = Eta(*eta), Nu(*nu)
-        self.tau_actuators_prev = tau_actuators.copy()
+        self.tau_actuators = tau_actuators.copy()
         return (measurements, 0, False, False, {}, False)
     
     def reset(self):

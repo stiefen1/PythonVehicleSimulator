@@ -3,6 +3,7 @@ from python_vehicle_simulator.vehicles.vessel import IVessel
 from python_vehicle_simulator.lib.obstacle import Obstacle
 from typing import List, Tuple, Dict, Any, Literal
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 
 
 class NavEnv:
@@ -15,10 +16,6 @@ class NavEnv:
             *args,
             wind:Wind=None,
             current:Current=None,
-            render_mode:Literal["human", "rgb_array"]=None,
-            verbose:bool=0,
-            skip_frames:int=0,
-            window_size = (20, 20),
             **kwargs
     ):
         self.own_vessel = own_vessel
@@ -27,7 +24,6 @@ class NavEnv:
         self.wind = wind or Wind(0, 0)
         self.current = current or Current(0, 0)
         self._dt = dt
-        self.skip_frames = skip_frames # Number of frame to skip for each frame displayed
 
         # Simulation results
         self.timestamps:List[float] = []
@@ -40,12 +36,9 @@ class NavEnv:
         self.t = 0
 
         # Rendering 
-        self.render_mode = render_mode
         self.fig = None
         self.ax = None
         self.vessel_plot = None
-        self.verbose = verbose
-        self.window_size = window_size
         
 
     def reset(self):
@@ -81,10 +74,10 @@ class NavEnv:
 
         # Step own vessel
         obs, r, term, trunc, info, done = self.own_vessel.step(self.current, self.wind, self.obstacles, self.target_vessels, *args, **kwargs)
-
+        
         # Rendering
-        if self.skip_frames == 0 or (self.t//self.dt) % (self.skip_frames) == 0:
-            self.render(self.render_mode, verbose=self.verbose)
+        # if self.skip_frames == 0 or (self.t//self.dt) % (self.skip_frames) == 0:
+        #     self.render(self.render_mode, verbose=self.verbose)
 
         # Time travel
         self.t += self.dt
@@ -100,8 +93,7 @@ class NavEnv:
 
         return obs, r, term, trunc, info, done
 
-    def render(self, mode=None, verbose:int=0):
-        mode = mode or self.render_mode
+    def render(self, mode=None, window_size:Tuple=(10, 10), verbose:int=0):
         if mode not in ("human", "human3d"):
             return
 
@@ -112,28 +104,20 @@ class NavEnv:
             plt.show()
 
         self.ax.cla()
-        # Assuming vessel position is self.own_vessel.eta.e, .n, .d
-        # x = self.own_vessel.eta.e
-        # y = self.own_vessel.eta.n
-        # z = getattr(self.own_vessel.eta, 'd', 0.0)
         if mode == "human3d":
-            geometry = self.own_vessel.geometry_for_3D_plot
             self.own_vessel.plot(ax=self.ax, verbose=verbose)
-            # self.vessel_plot.set_data(*geometry[0:2])
-            # self.vessel_plot.set_3d_properties(geometry[2])
         else:
             self.own_vessel.plot(ax=self.ax, verbose=verbose, c='black')
             for obs in self.obstacles:
                 obs.plot(ax=self.ax, verbose=verbose, c='grey')
             for tv in self.target_vessels:
                 tv.plot(ax=self.ax, verbose=verbose, c='red')
-            # self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
-        self.ax.set_xlim([self.own_vessel.eta[1]-self.window_size[0]/2, self.own_vessel.eta[1]+self.window_size[0]/2])
-        self.ax.set_ylim([self.own_vessel.eta[0]-self.window_size[1]/2, self.own_vessel.eta[0]+self.window_size[1]/2])
+
+        self.ax.set_xlim([self.own_vessel.eta[1]-window_size[0]/2, self.own_vessel.eta[1]+window_size[0]/2])
+        self.ax.set_ylim([self.own_vessel.eta[0]-window_size[1]/2, self.own_vessel.eta[0]+window_size[1]/2])
         self.ax.set_xlabel('East')
         self.ax.set_ylabel('North')
         self.ax.set_title(f"Vessel Position (t={self.t:.1f})")
-        # self.ax.legend()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 

@@ -23,6 +23,7 @@ from python_vehicle_simulator.lib.guidance import IGuidance
 from python_vehicle_simulator.lib.control import IControl
 from python_vehicle_simulator.lib.navigation import INavigation
 from python_vehicle_simulator.lib.actuator import IActuator
+from python_vehicle_simulator.lib.diagnosis import IDiagnosis, Diagnosis
 import casadi as ca, math
 
 INF = float('inf')
@@ -47,12 +48,12 @@ INF = float('inf')
 @dataclass
 class RevoltBowThrusterParams: # front
     ## Propellers       
-    T_n: float = 0.1                                            # Propeller time constant (s)
+    T_n: float = 0.3                                            # Propeller time constant (s)
     T_a: float = 3.0                                            # Azimuth angle time constant (s) -> Chosen by me
     k_pos: float = 1.518e-3                                     # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
     k_neg: float = 6.172e-4                                     # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
     f_max: float = 14                                           # Max positive force, one propeller
-    f_min: float = -6.1                                         # Max negative force, one propeller
+    f_min: float = 0 # -6.1                                         # Max negative force, one propeller
     n_max: float = math.sqrt(f_max/k_pos)                       # Max (positive) propeller speed
     n_min: float = -math.sqrt(-f_min/k_neg)
     a_max: float = math.pi                                     # Max (positive) propeller speed
@@ -63,24 +64,27 @@ class RevoltBowThrusterParams: # front
 @dataclass
 class RevoltSternThrusterParams: # back
     ## Propellers       
-    T_n: float = 0.1                                            # Propeller time constant (s)
+    T_n: float = 0.3                                            # Propeller time constant (s)
     T_a: float = 3.0                                            # Azimuth angle time constant (s) -> Chosen by me
     k_pos: float = 2.7e-3                                       # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
     k_neg: float = 2.7e-3                                       # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
     f_max: float = 25                                           # Max positive force, one propeller
-    f_min: float = -25                                          # Max negative force, one propeller
+    f_min: float = 0 # -25                                      # Max negative force, one propeller
     n_max: float = math.sqrt(f_max/k_pos)                       # Max (positive) propeller speed
     n_min: float = -math.sqrt(-f_min/k_neg)
-    a_max: float = math.pi                                     # Max (positive) propeller speed
-    a_min: float = -math.pi                                      # Min (negative) propeller speed
+    a_max: float = math.pi                                      # Max (positive) propeller speed
+    a_min: float = -math.pi                                     # Min (negative) propeller speed
     max_radians_per_step: float = math.pi/6
     max_newton_per_step: float = 10
+
+    
 
 @dataclass
 class RevoltThrusterParameters:
     ## Propellers       
-    T_n: float = 0.1                                            # Propeller time constant (s)
-    T_a: float = 3.0                                            # Azimuth angle time constant (s) -> Chosen by me
+    # T_n: float = 0.3                                            # Propeller time constant (s)
+    # T_a: float = 3.0 
+    thrusters: List = field(init=False)                         # Azimuth angle time constant (s) -> Chosen by me
     k_pos: np.ndarray = field(init=False)                       # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
     k_neg: np.ndarray = field(init=False)                       # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
     f_max: np.ndarray = field(init=False)                       # Max positive force, one propeller
@@ -89,31 +93,37 @@ class RevoltThrusterParameters:
     n_min: np.ndarray = field(init=False)
     lba: np.ndarray = field(init=False)                       # Max (positive) propeller speed
     uba: np.ndarray = field(init=False)                         # Min (negative) propeller speed
-    n_dot_max: float = field(init=False)
     xy: np.ndarray = field(init=False) # azimuth, azimuth, thruster from https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2452115/16486_FULLTEXT.pdf (p.56)
     max_radians_per_step: np.ndarray = field(init=False)
     max_newton_per_step: np.ndarray = field(init=False)
     time_constant: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        self.k_pos: np.ndarray = np.array([2.7e-3, 2.7e-3, 1.518e-3])    # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
-        self.k_neg: np.ndarray = np.array([2.7e-3, 2.7e-3, 6.172e-4])     # Negative Bollard, one propeller
-        self.f_max: np.ndarray = np.array([25, 25, 14])                  # Max positive force, one propeller
-        self.f_min: np.ndarray = np.array([-25, -25, -6.1]) 
-        self.n_max = np.sqrt(self.f_max / self.k_pos)
-        self.n_min = -np.sqrt(-self.f_min / self.k_neg)
-        self.lba = np.array([-np.pi, -np.pi, -np.pi])                       # Azimuth angles constraints
-        self.uba = np.array([np.pi, np.pi, np.pi])
+        self.thrusters = [RevoltSternThrusterParams(), RevoltSternThrusterParams(), RevoltBowThrusterParams()]  
+        self.k_pos: np.ndarray = np.array([thruster.k_pos for thruster in self.thrusters])    # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
+        self.k_neg: np.ndarray = np.array([thruster.k_neg for thruster in self.thrusters])     # Negative Bollard, one propeller
+        self.f_max: np.ndarray = np.array([thruster.f_max for thruster in self.thrusters])                  # Max positive force, one propeller
+        self.f_min: np.ndarray = np.array([thruster.f_min for thruster in self.thrusters]) # np.array([-25, -25, -6.1]) 
+        self.n_max = np.array([thruster.n_max for thruster in self.thrusters])
+        self.n_min = np.array([thruster.n_min for thruster in self.thrusters])
+        self.lba = np.array([thruster.a_min for thruster in self.thrusters])                       # Azimuth angles constraints
+        self.uba = np.array([thruster.a_max for thruster in self.thrusters])
         self.xy = np.array([[-1.65, -0.15], [-1.65, 0.15], [1.15, 0.0]])
         self.max_radians_per_step = np.array([np.pi/6, np.pi/6, np.pi/36])
         self.max_newton_per_step = np.array([10.0, 10.0, 4.0])
-        self.time_constant = np.array(3*[self.T_n] + 3*[self.T_a])
+        self.time_constant = np.array([thruster.T_n for thruster in self.thrusters] + [thruster.T_a for thruster in self.thrusters])
 
-        self.T = lambda alpha, lx, ly : np.array([
+        self.Ti = lambda alpha, lx, ly : np.array([
             ca.cos(alpha),
             ca.sin(alpha),
             lx*ca.sin(alpha) - ly * ca.cos(alpha)
         ])
+
+        self.T = lambda a1, a2, a3 : ca.vertcat(
+            ca.horzcat(ca.cos(a1), ca.sin(a1), self.xy[0, 0]*ca.sin(a1) - self.xy[0, 1] * ca.cos(a1)),
+            ca.horzcat(ca.cos(a2), ca.sin(a2), self.xy[1, 0]*ca.sin(a2) - self.xy[1, 1] * ca.cos(a2)),
+            ca.horzcat(ca.cos(a3), ca.sin(a3), self.xy[2, 0]*ca.sin(a3) - self.xy[2, 1] * ca.cos(a3))
+        )
 
 
 @dataclass
@@ -210,11 +220,12 @@ class Revolt3DOF(IVessel):
         guidance:IGuidance=None,
         navigation:INavigation=None,
         control:IControl=None,
+        diagnosis:IDiagnosis=None,
         actuators:List[IActuator]=None,
         name:str="Otter USV (see 'otter.py' for more details)",
-        mmsi:str=None
+        mmsi:str=None,
     ):
-        super().__init__(params, dt=dt, eta=eta, nu=nu, guidance=guidance, navigation=navigation, control=control, actuators=actuators, name=name, mmsi=mmsi)
+        super().__init__(params, dt=dt, eta=eta, nu=nu, guidance=guidance, navigation=navigation, control=control, diagnosis=diagnosis, actuators=actuators, name=name, mmsi=mmsi)
 
         self.tauX = tau_X  # surge force (N)
 
@@ -270,6 +281,8 @@ def test() -> None:
             AzimuthThruster(xy=(1.15, 0.0), **vars(RevoltBowThrusterParams()))
         ]
     )
+    params = RevoltThrusterParameters()
+    print(params.n_max, params.n_min)
 
     # [-1.65, -0.15], [-1.65, 0.15], [1.15, 0.0]
 
@@ -348,5 +361,5 @@ def jacobians() -> None:
     print(Jx_lambda(0.1, 0.1, 0.1, 0.1, 0.1, 0.1))
 
 if __name__ == "__main__":
-    jacobians()
-    # test()
+    # jacobians()
+    test()

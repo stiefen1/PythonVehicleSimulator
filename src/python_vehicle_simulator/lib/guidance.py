@@ -16,7 +16,7 @@ from python_vehicle_simulator.lib.weather import Current, Wind
 from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.lib.path import PWLPath
 from python_vehicle_simulator.visualizer.drawable import IDrawable
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 from matplotlib.axes import Axes
 class IGuidance(IDrawable, ABC):
     def __init__(
@@ -25,12 +25,15 @@ class IGuidance(IDrawable, ABC):
             **kwargs
     ):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
+        self.prev = {'eta_des': None, 'nu_des': None, 'info': None}
 
-    def __call__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-        return self.__get__(eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+    def __call__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
+        eta_des, nu_des, info = self.__get__(eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+        self.prev = {'eta_des': eta_des, 'nu_des': nu_des, 'info': info}
+        return eta_des, nu_des, info
 
     @abstractmethod
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
         return eta, nu, {}
     
     @abstractmethod
@@ -58,7 +61,7 @@ class Guidance(IGuidance):
         self.desired_speed = desired_speed
         super().__init__(*args, **kwargs)
 
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
         return np.array([0, 0, 0, 0, 0, self.desired_heading], float), np.array([self.desired_speed, 0, 0, 0, 0, 0], float), {}
 
     def reset(self):
@@ -82,11 +85,11 @@ class PathFollowingGuidance(IGuidance):
         self.dt = dt
         super().__init__(*args, **kwargs)
 
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-        return None, None, {
+    def __get__(self, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, Dict]:
+        return None, np.array([self.desired_speed, 0, 0, 0, 0, 0]), {
             'path': self.path.get_target_wpts_from(eta[0], eta[1], self.desired_speed*self.dt, self.horizon+1, final_heading=self.final_heading)
         }
 
     def reset(self):
         pass
-    
+

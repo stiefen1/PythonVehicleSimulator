@@ -1,6 +1,6 @@
 import numpy as np
 from abc import ABC, abstractmethod
-from typing import Any, Tuple
+from typing import Any, Tuple, Dict, List
 from python_vehicle_simulator.lib.weather import Current
 
 """
@@ -24,6 +24,7 @@ class IActuator(ABC):
             time_const:Tuple=None,  # Time constant
             f_min:Tuple=None,       # min force
             f_max:Tuple=None,       # max force
+            faults:List[Dict]=None,
             **kwargs
 
     ):
@@ -34,20 +35,40 @@ class IActuator(ABC):
         self.u_max = np.array(u_max)
         self.dim = len(u_0)
         self.time_const = np.array(time_const) if time_const is not None else np.array(self.dim * [float('inf')])
+        self.u_actual_prev = np.array(u_0)
         self.u_prev = np.array(u_0)
         self.f_min = np.array(f_min)
         self.f_max = np.array(f_max)
+        self.faults = faults or []
+        self.prev = {'tau': None, 'info':{'u_actual': None, 'u': None}}
+        self.t = 0
+        # faults[0] = {
+        #       't0': 40,
+        #       'tf': 100,
+        #       'type': 'loss-of-efficiency'
+        #       'params': 0.5 
+        #       
+        #}
 
 
     def dynamics(self, u:np.ndarray, nu:np.ndarray, current:Current, dt:float, *args, **kwargs) -> np.ndarray:
         """
             Wrapper for __dynamics__. Add saturation to actuator input commands
         """
-        u_dot = (u-self.u_prev) / self.time_const
-        u = np.clip(self.u_prev + u_dot * dt, self.u_min, self.u_max) # clip input within min/max bounds
-        tau = self.__dynamics__(u, nu, current, *args, **kwargs)
-        self.u_prev = u
-        return tau
+        self.u_prev = u.copy()
+        u_dot = (u-self.u_actual_prev) / self.time_const
+        u = np.clip(self.u_actual_prev + u_dot * dt, self.u_min, self.u_max) # clip input within min/max bounds
+        self.prev = {
+            'info':{
+                'u_actual': self.u_actual_prev,
+                'u': self.u_prev
+            }
+        } # self.prev must be available when calling __dynamics__
+        self.tau_prev = self.__dynamics__(u, nu, current, *args, **kwargs)
+        self.prev.update({'tau': self.tau_prev})
+        self.u_actual_prev = u.copy()
+        self.t += dt
+        return self.tau_prev
 
     @abstractmethod
     def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
@@ -58,7 +79,13 @@ class IActuator(ABC):
         return np.zeros((6,))   
     
     def reset(self):
-        self.u_prev = self.u_0.copy()
+        self.u_actual_prev = self.u_0.copy()
+
+    @property
+    def info(self) -> Dict:
+        return {
+            'u_actual': self.u_actual_prev
+        }
 
 class Thruster(IActuator):
     def __init__(
@@ -106,17 +133,31 @@ class AzimuthThruster(IActuator):
             f_max:float=float('inf'),
             f_min:float=-float('inf'),
             orientation:float=0.0,
+            faults:List[Dict]=None,
             **kwargs
     ):
-        super().__init__(xy=xy, orientation=orientation, u_0=(alpha_0, n_0), u_min=(a_min, n_min), u_max=(a_max, n_max), *args, time_const=(T_a, T_n), f_min=(f_min,), f_max=(f_max,), **kwargs)
+        super().__init__(xy=xy, orientation=orientation, u_0=(alpha_0, n_0), u_min=(a_min, n_min), u_max=(a_max, n_max), *args, time_const=(T_a, T_n), f_min=(f_min,), f_max=(f_max,), faults=faults, **kwargs)
         self.k_pos = k_pos
         self.k_neg = k_neg
+        self.efficiency = 1.0
+        self.prev['info'].update({'efficiency': self.efficiency})
+
+    def apply_faults(self) -> None:
+        for fault in self.faults:
+            match fault['type']:
+                case 'loss-of-efficiency':
+                    if self.t >= fault['t0']:
+                        self.efficiency = fault['efficiency']
+                case _:
+                    print("Fault type is invalid")
+        self.prev['info']['efficiency'] = self.efficiency
 
     def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
         """
         u: azimuth, speed
         """
-        f = np.clip(self.k_pos * u[1]**2 if u[1]>=0 else -self.k_neg * u[1]**2, self.f_min, self.f_max)
+        self.apply_faults() # Apply fault if it must occur
+        f = self.efficiency * np.clip(self.k_pos * u[1]**2 if u[1]>=0 else -self.k_neg * u[1]**2, self.f_min, self.f_max)
         return np.array([
                 np.cos(self.orientation + u[0]),
                 np.sin(self.orientation + u[0]),
