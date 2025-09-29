@@ -26,7 +26,7 @@ class IDrawable(ABC):
                 if isinstance(item, IDrawable):
                     # If object is a drawable, plot all sub objects
                     item.plot(*args, ax=ax, verbose=verbose, **kwargs)
-            return self.__plot__(*args,ax=ax, **kwargs)
+            return self.__plot__(*args, ax=ax, **kwargs)
         else:
             return ax
     
