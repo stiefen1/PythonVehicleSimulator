@@ -50,7 +50,7 @@ class RevoltBowThrusterParams: # front
     ## Propellers       
     T_n: float = 0.3                                            # Propeller time constant (s)
     T_a: float = 3.0                                            # Azimuth angle time constant (s) -> Chosen by me
-    k_pos: float = 1.518e-3                                     # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
+    k_pos: float = 2.7e-3 # 1.518e-3                                     # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
     k_neg: float = 6.172e-4                                     # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
     f_max: float = 14                                           # Max positive force, one propeller
     f_min: float = 0 # -6.1                                         # Max negative force, one propeller
@@ -256,12 +256,12 @@ class Revolt3DOF(IVessel):
         C = CRB + CA
 
         # Hydrodynamic linear damping + nonlinear yaw damping
-        tau_damp = -np.matmul(self.params.D, nu)
+        tau_damp = np.matmul(self.params.D, nu)
 
         # State derivatives (with dimension)
         sum_tau = (
             tau_actuators_3
-            + tau_damp
+            - tau_damp
             - np.matmul(C, nu)
         )
 

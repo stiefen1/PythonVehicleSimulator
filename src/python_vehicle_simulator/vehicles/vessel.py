@@ -114,7 +114,7 @@ class IVessel(IDrawable):
         nu = Euler(self.nu.to_numpy(), nu_dot, self.dt)
 
         # Forward Euler integration of eta
-        eta_dot = self.eta_dot(nu)
+        eta_dot = self.eta_dot(self.nu.to_numpy())
         eta = Euler(self.eta.to_numpy(), eta_dot, self.dt)
         
         self.eta, self.nu = Eta(*eta), Nu(*nu)

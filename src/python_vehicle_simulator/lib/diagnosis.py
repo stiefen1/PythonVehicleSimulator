@@ -228,8 +228,14 @@ class GradientDescentDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
         x = np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]])[:, None]
         error = self.f_lambda(eta_prev[0], eta_prev[1], eta_prev[5], nu_prev[0], nu_prev[1], nu_prev[5], a1, n1, a2, n2, a3, n3, self.params[0], self.params[1], self.params[2]) - x
         dfddelta = self.Jdelta_lambda(eta_prev[0], eta_prev[1], eta_prev[5], nu_prev[0], nu_prev[1], nu_prev[5], a1, n1, a2, n2, a3, n3)
-        # print(dfddelta.shape, self.params.shape, error.shape)
-        self.params = np.clip((self.params - self.lr * 2 * error.T @ dfddelta)[0], 0, 1)
+        gradient = 2 * error.T @ dfddelta
+
+        # # Coordinate descent method: Gauss-Southwell -> improves A LOT without noise but struggles in real conditions
+        # keep_max = np.zeros_like(gradient)
+        # keep_max[0, np.argmax(gradient, axis=1)] = 1
+        # gradient = keep_max * gradient
+        
+        self.params = np.clip((self.params - self.lr * gradient)[0], 0, 1)
         info = {}
         # print('delta: ', self.params)
         return {'delta': self.params}, info
@@ -253,8 +259,6 @@ class ParticleFilterDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
         self.process_cov:np.ndarray = process_cov
         self.n_particles = n_particles
         self.effective_size_thresh = effective_size_thresh or n_particles // 10
-        self.particles = []
-        self.weights = []
         self.particles = np.ones((self.n_particles, 3)) * delta0
         self.weights = np.ones((self.n_particles,)) / self.n_particles
 
@@ -286,13 +290,18 @@ class ParticleFilterDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
         quad_form = np.einsum('ij,jk,ik->i', diff.T, self.meas_cov_inv, diff.T)  # length N
         likelihood = self.weights * np.exp(-0.5 * quad_form)
         # likelihood = self.weights * np.exp(-0.5*np.diag((x_hat-y[:, None]).T @ self.meas_cov @ (x_hat-y[:, None]))) # Check likelihood of this w.r.t measurement noise
-        self.weights = likelihood / np.sum(likelihood)
-        
+
+        if np.sum(likelihood) > 1e-9:
+            self.weights = likelihood / np.sum(likelihood)
+        else:
+            self.weights = np.ones((self.n_particles,)) / self.n_particles
+
+
         # Find best
         # best_particle = np.sum(self.weights[:, None] * new_particles, axis=0)
         # best_particle = new_particles[np.argmax(self.weights)]
 
-        K = self.n_particles // 10  # or any number <= n_particles
+        K = self.n_particles // 1  # or any number <= n_particles
         # 1) Get indices of particles with largest weights
         topK_idx = np.argsort(self.weights)[-K:]  # last K indices have largest weights
         # 2) Take weighted average among these K particles
@@ -301,17 +310,17 @@ class ParticleFilterDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
         best_particle = np.sum(new_particles[topK_idx] * topK_weights[:, None], axis=0)
 
         # Resample with probability self.weights pick new_particles, if effective sample size < threshold
-        # effective_sample_size = 1 / np.sum(np.square(self.weights))
-        # if effective_sample_size < self.effective_size_thresh:
-        #     print("Resample!")
-        #     # Draw N indices according to weights
-        #     indices = np.random.choice(self.n_particles, size=self.n_particles, p=self.weights)
-        #     # Resample particles and reset weights
-        #     new_particles = new_particles[indices]
-        #     self.weights = np.ones(self.n_particles) / self.n_particles
+        effective_sample_size = 1 / np.sum(np.square(self.weights))
+        if effective_sample_size < self.effective_size_thresh:
+            # print("Resample!")
+            # Draw N indices according to weights
+            indices = np.random.choice(self.n_particles, size=self.n_particles, p=self.weights)
+            # Resample particles and reset weights
+            new_particles = new_particles[indices]
+            self.weights = np.ones(self.n_particles) / self.n_particles
 
         self.particles = new_particles.copy()
-        # print(new_particles.shape)
+        # print("std: ", np.std(self.particles, axis=0))
 
         info = {'particles': new_particles.copy().T, 'top-k-particles': new_particles[topK_idx].copy().T}
         return {'delta': best_particle}, info

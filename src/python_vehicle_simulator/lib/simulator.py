@@ -63,7 +63,7 @@ class Simulator:
                 self._store_current_state()
             
             if render and (self.skip_frames == 0 or (t//self.dt) % (self.skip_frames) == 0):
-                self.env.render(self.render_mode, verbose=self.verbose)
+                self.env.render(self.render_mode, verbose=self.verbose, window_size=self.window_size)
 
     def _clear_simulation_data(self):
         """Clear stored simulation data"""
@@ -841,4 +841,344 @@ class Simulator:
         ax.spines['bottom'].set_linewidth(1.5)
         
         return fig
+
+    def save_animation(self, filename: str = "simulation_animation", format: str = "gif", 
+                   fps: int = 10, duration_per_frame: float = None, dpi: int = 100,
+                   skip_frames: int = None, figsize: Tuple[int, int] = (10, 8)) -> str:
+        """
+        Generate and save an animation (GIF or MP4) from the stored simulation data.
+        
+        Args:
+            filename: Output filename (without extension)
+            format: Animation format - "gif" or "mp4"
+            fps: Frames per second for the animation
+            duration_per_frame: Duration per frame in seconds (for GIF). If None, calculated from fps
+            dpi: Resolution of the animation
+            skip_frames: Number of frames to skip (default uses self.skip_frames)
+            figsize: Figure size tuple (width, height)
+            
+        Returns:
+            str: Path to the saved animation file
+            
+        Example:
+            # Generate GIF at 15 fps
+            sim.save_animation("my_simulation", format="gif", fps=15)
+            
+            # Generate MP4 video at 30 fps with higher resolution
+            sim.save_animation("vessel_tracking", format="mp4", fps=30, dpi=150)
+            
+            # Generate GIF with custom frame duration
+            sim.save_animation("slow_motion", format="gif", duration_per_frame=0.2)
+        """
+    
+        if not self.simulation_data['timestamps']:
+            raise ValueError("No simulation data available. Run simulation first with store_data=True")
+        
+        # Import animation libraries
+        try:
+            from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
+            import os
+        except ImportError as e:
+            raise ImportError(f"Required animation libraries not available: {e}. "
+                            "Install with: pip install matplotlib[animation] pillow")
+        
+        if format.lower() == "mp4":
+            try:
+                # Test if ffmpeg is available
+                import subprocess
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                raise RuntimeError("FFmpeg not found. Install FFmpeg for MP4 support or use GIF format instead.")
+        
+        print(f"Generating {format.upper()} animation...")
+        
+        # Setup parameters
+        skip = skip_frames if skip_frames is not None else self.skip_frames
+        timestamps = self.simulation_data['timestamps']
+        
+        # Filter frames based on skip_frames
+        if skip > 0:
+            frame_indices = list(range(0, len(timestamps), skip + 1))
+        else:
+            frame_indices = list(range(len(timestamps)))
+        
+        # Setup figure and axis
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        
+        # Calculate axis limits from all positions
+        all_positions = []
+        for state in self.simulation_data['own_vessel_states']:
+            all_positions.append([state['eta'][1], state['eta'][0]])  # [East, North]
+        
+        for target_states in self.simulation_data['target_vessel_states']:
+            for state in target_states:
+                all_positions.append([state['eta'][1], state['eta'][0]])
+        
+        if all_positions:
+            all_positions = np.array(all_positions)
+            margin = 10
+            x_min, x_max = all_positions[:, 0].min() - margin, all_positions[:, 0].max() + margin
+            y_min, y_max = all_positions[:, 1].min() - margin, all_positions[:, 1].max() + margin
+        else:
+            x_min, x_max, y_min, y_max = -50, 50, -50, 50
+        
+        def animate_frame(frame_num):
+            """Animation function called for each frame"""
+            i = frame_indices[frame_num]
+            t = timestamps[i]
+            
+            ax.clear()
+            
+            # Set vessel states for plotting
+            own_state = self.simulation_data['own_vessel_states'][i]
+            self.env.own_vessel.eta = own_state['eta']
+            self.env.own_vessel.nu = own_state['nu']
+            
+            # Plot own vessel
+            self.env.own_vessel.plot(ax=ax, verbose=self.verbose, c='blue', label='Own Vessel')
+            
+            # Plot target vessels
+            target_states = self.simulation_data['target_vessel_states'][i]
+            for j, target_state in enumerate(target_states):
+                if j < len(self.env.target_vessels):
+                    self.env.target_vessels[j].eta = target_state['eta']
+                    self.env.target_vessels[j].nu = target_state['nu']
+                    self.env.target_vessels[j].plot(ax=ax, verbose=self.verbose, c='red', 
+                                                label='Target Vessel' if j == 0 else '')
+            
+            # Plot obstacles
+            if self.simulation_data['obstacles']:
+                for obs in self.simulation_data['obstacles']:
+                    obs.fill(ax=ax, color='grey', alpha=0.5, label='Obstacles')
+                    obs.plot(ax=ax, color='black', alpha=0.8)
+            
+            # Plot trajectory trail (optional - shows path taken)
+            if frame_num > 0:
+                # Plot trail for own vessel
+                trail_indices = frame_indices[:frame_num+1]
+                trail_east = [self.simulation_data['own_vessel_states'][idx]['eta'][1] for idx in trail_indices]
+                trail_north = [self.simulation_data['own_vessel_states'][idx]['eta'][0] for idx in trail_indices]
+                ax.plot(trail_east, trail_north, 'b--', alpha=0.6, linewidth=1, label='Own Vessel Trail')
+                
+                # Plot trail for target vessels
+                for j, _ in enumerate(self.env.target_vessels):
+                    if j < len(self.env.target_vessels):
+                        trail_east = [self.simulation_data['target_vessel_states'][idx][j]['eta'][1] 
+                                    for idx in trail_indices if j < len(self.simulation_data['target_vessel_states'][idx])]
+                        trail_north = [self.simulation_data['target_vessel_states'][idx][j]['eta'][0] 
+                                    for idx in trail_indices if j < len(self.simulation_data['target_vessel_states'][idx])]
+                        if trail_east and trail_north:
+                            ax.plot(trail_east, trail_north, 'r--', alpha=0.6, linewidth=1, 
+                                label='Target Trail' if j == 0 else '')
+            
+            # Set plot properties
+            ax.set_xlim([x_min, x_max])
+            ax.set_ylim([y_min, y_max])
+            ax.set_xlabel('East (m)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('North (m)', fontsize=12, fontweight='bold')
+            ax.set_title(f"Vessel Simulation (t={t:.1f}s)", fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            # ax.legend(fontsize=10, loc='upper right')
+            ax.set_aspect('equal')
+            
+            # Add styling
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_linewidth(1.5)
+            ax.spines['bottom'].set_linewidth(1.5)
+        
+        # Create animation
+        total_frames = len(frame_indices)
+        anim = FuncAnimation(fig, animate_frame, frames=total_frames, interval=1000/fps, blit=False, repeat=True)
+        
+        # Save animation
+        output_file = f"{filename}.{format.lower()}"
+        
+        if format.lower() == "gif":
+            # Calculate duration per frame for GIF
+            if duration_per_frame is None:
+                duration_per_frame = 1000 / fps  # Convert fps to milliseconds per frame
+            else:
+                duration_per_frame = duration_per_frame * 1000  # Convert seconds to milliseconds
+            
+            writer = PillowWriter(fps=fps)
+            anim.save(output_file, writer=writer, dpi=dpi)
+            
+        elif format.lower() == "mp4":
+            writer = FFMpegWriter(fps=fps, bitrate=1800)
+            anim.save(output_file, writer=writer, dpi=dpi)
+            
+        else:
+            raise ValueError(f"Unsupported format '{format}'. Supported formats: 'gif', 'mp4'")
+        
+        plt.close(fig)  # Clean up
+        
+        print(f"Animation saved as: {output_file}")
+        print(f"Total frames: {total_frames}, Duration: {total_frames/fps:.1f} seconds")
+        
+        return output_file
+
+    def save_animation_with_trails(self, filename: str = "simulation_with_trails", format: str = "gif", 
+                                fps: int = 10, trail_length: int = 50, dpi: int = 100,
+                                skip_frames: int = None, figsize: Tuple[int, int] = (10, 8)) -> str:
+        """
+        Generate animation with dynamic trailing paths that show recent vessel movements.
+        
+        Args:
+            filename: Output filename (without extension)  
+            format: Animation format - "gif" or "mp4"
+            fps: Frames per second for the animation
+            trail_length: Number of recent positions to show in trail
+            dpi: Resolution of the animation
+            skip_frames: Number of frames to skip (default uses self.skip_frames)
+            figsize: Figure size tuple (width, height)
+            
+        Returns:
+            str: Path to the saved animation file
+            
+        Example:
+            # Generate GIF with 30-point trailing paths
+            sim.save_animation_with_trails("vessel_trails", trail_length=30, fps=15)
+        """
+        
+        if not self.simulation_data['timestamps']:
+            raise ValueError("No simulation data available. Run simulation first with store_data=True")
+        
+        try:
+            from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
+            import os
+        except ImportError as e:
+            raise ImportError(f"Required animation libraries not available: {e}")
+        
+        if format.lower() == "mp4":
+            try:
+                import subprocess
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                raise RuntimeError("FFmpeg not found. Install FFmpeg for MP4 support or use GIF format instead.")
+        
+        print(f"Generating {format.upper()} animation with dynamic trails...")
+        
+        # Setup parameters  
+        skip = skip_frames if skip_frames is not None else self.skip_frames
+        timestamps = self.simulation_data['timestamps']
+        
+        if skip > 0:
+            frame_indices = list(range(0, len(timestamps), skip + 1))
+        else:
+            frame_indices = list(range(len(timestamps)))
+        
+        # Setup figure
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        
+        # Calculate axis limits
+        all_positions = []
+        for state in self.simulation_data['own_vessel_states']:
+            all_positions.append([state['eta'][1], state['eta'][0]])
+        
+        for target_states in self.simulation_data['target_vessel_states']:
+            for state in target_states:
+                all_positions.append([state['eta'][1], state['eta'][0]])
+        
+        if all_positions:
+            all_positions = np.array(all_positions)
+            margin = 10
+            x_min, x_max = all_positions[:, 0].min() - margin, all_positions[:, 0].max() + margin
+            y_min, y_max = all_positions[:, 1].min() - margin, all_positions[:, 1].max() + margin
+        else:
+            x_min, x_max, y_min, y_max = -50, 50, -50, 50
+        
+        def animate_frame_with_trails(frame_num):
+            """Animation function with dynamic trails"""
+            i = frame_indices[frame_num]
+            t = timestamps[i]
+            
+            ax.clear()
+            
+            # Calculate trail range
+            trail_start = max(0, frame_num - trail_length)
+            trail_indices = frame_indices[trail_start:frame_num+1]
+            
+            # Plot dynamic trails first (so vessels appear on top)
+            if len(trail_indices) > 1:
+                # Own vessel trail
+                trail_east = [self.simulation_data['own_vessel_states'][idx]['eta'][1] for idx in trail_indices]
+                trail_north = [self.simulation_data['own_vessel_states'][idx]['eta'][0] for idx in trail_indices]
+                
+                # Create fading effect for trail
+                alphas = np.linspace(0.1, 0.8, len(trail_east))
+                for j in range(len(trail_east)-1):
+                    ax.plot(trail_east[j:j+2], trail_north[j:j+2], 'b-', alpha=alphas[j], linewidth=2)
+                
+                # Target vessel trails
+                for vessel_idx, _ in enumerate(self.env.target_vessels):
+                    trail_east = [self.simulation_data['target_vessel_states'][idx][vessel_idx]['eta'][1] 
+                                for idx in trail_indices if vessel_idx < len(self.simulation_data['target_vessel_states'][idx])]
+                    trail_north = [self.simulation_data['target_vessel_states'][idx][vessel_idx]['eta'][0] 
+                                for idx in trail_indices if vessel_idx < len(self.simulation_data['target_vessel_states'][idx])]
+                    
+                    if len(trail_east) > 1:
+                        alphas = np.linspace(0.1, 0.8, len(trail_east))
+                        for j in range(len(trail_east)-1):
+                            ax.plot(trail_east[j:j+2], trail_north[j:j+2], 'r-', alpha=alphas[j], linewidth=2)
+            
+            # Set current vessel states and plot vessels
+            own_state = self.simulation_data['own_vessel_states'][i]
+            self.env.own_vessel.eta = own_state['eta']
+            self.env.own_vessel.nu = own_state['nu']
+            self.env.own_vessel.plot(ax=ax, verbose=self.verbose, c='blue', label='Own Vessel')
+            
+            # Plot target vessels
+            target_states = self.simulation_data['target_vessel_states'][i]
+            for j, target_state in enumerate(target_states):
+                if j < len(self.env.target_vessels):
+                    self.env.target_vessels[j].eta = target_state['eta']
+                    self.env.target_vessels[j].nu = target_state['nu']
+                    self.env.target_vessels[j].plot(ax=ax, verbose=self.verbose, c='red', 
+                                                label='Target Vessel' if j == 0 else '')
+            
+            # Plot obstacles
+            if self.simulation_data['obstacles']:
+                for obs in self.simulation_data['obstacles']:
+                    obs.fill(ax=ax, color='grey', alpha=0.5, label='Obstacles')
+                    obs.plot(ax=ax, color='black', alpha=0.8)
+            
+            # Set plot properties
+            ax.set_xlim([x_min, x_max])
+            ax.set_ylim([y_min, y_max])
+            ax.set_xlabel('East (m)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('North (m)', fontsize=12, fontweight='bold')
+            ax.set_title(f"Vessel Simulation with Trails (t={t:.1f}s)", fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            # ax.legend(fontsize=10, loc='upper right')
+            ax.set_aspect('equal')
+            
+            # Add styling
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_linewidth(1.5)
+            ax.spines['bottom'].set_linewidth(1.5)
+        
+        # Create animation
+        total_frames = len(frame_indices)
+        anim = FuncAnimation(fig, animate_frame_with_trails, frames=total_frames, interval=1000/fps, blit=False, repeat=True)
+        
+        # Save animation
+        output_file = f"{filename}.{format.lower()}"
+        
+        if format.lower() == "gif":
+            writer = PillowWriter(fps=fps)
+            anim.save(output_file, writer=writer, dpi=dpi)
+        elif format.lower() == "mp4":
+            writer = FFMpegWriter(fps=fps, bitrate=1800)
+            anim.save(output_file, writer=writer, dpi=dpi)
+        else:
+            raise ValueError(f"Unsupported format '{format}'. Supported formats: 'gif', 'mp4'")
+        
+        plt.close(fig)
+        
+        print(f"Animation with trails saved as: {output_file}")
+        print(f"Total frames: {total_frames}, Duration: {total_frames/fps:.1f} seconds, Trail length: {trail_length}")
+        
+        return output_file
 

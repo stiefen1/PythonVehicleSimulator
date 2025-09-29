@@ -45,6 +45,8 @@ class PWLPath(IDrawable):
         Returns a set of N waypoints (north, east) along the path, separated by a distance dp
         if heading is True, a third dimension is added with desired heading values.
 
+        Projection of the current position is included to simplify MPC implementation.
+
         dp can be computed using the desired speed and sampling time, for instance.
         """
         linestring = shapely.LineString(self.waypoints)
@@ -52,7 +54,7 @@ class PWLPath(IDrawable):
         initial_distance_along = linestring.project(point)
         target_wpts = []
         heading = None
-        for n in range(1, N+1):
+        for n in range(0, N):
             p_n = linestring.interpolate(initial_distance_along + n * dp)
             p_next = linestring.interpolate(initial_distance_along + (n+1) * dp)
             if initial_distance_along + n * dp >= self.length:

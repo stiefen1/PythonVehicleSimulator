@@ -16,17 +16,20 @@ from python_vehicle_simulator.utils.unit_conversion import DEG2RAD
 from python_vehicle_simulator.lib.weather import Current, Wind
 from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.lib.actuator import Thruster
+from python_vehicle_simulator.visualizer.drawable import IDrawable
 from typing import List, Tuple
 from abc import ABC, abstractmethod
 from math import sqrt
+from matplotlib.axes import Axes
 import keyboard
 
-class IControl(ABC):
+class IControl(IDrawable, ABC):
     def __init__(
             self,
             *args,
             **kwargs
     ):
+        IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
         self.prev = {'u': None, 'info': None}
 
     def __call__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
@@ -41,6 +44,15 @@ class IControl(ABC):
     @abstractmethod
     def reset(self):
         pass
+
+    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+        return ax
+
+    def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:
+        return ax
+
+    def __fill__(self, ax:Axes, *args, **kwargs) -> Axes:
+        return ax
 
 class Control(IControl):
     def __init__(

@@ -8,6 +8,7 @@ from python_vehicle_simulator.lib.physics import RHO, GRAVITY
 import numpy as np, casadi as ca, matplotlib.pyplot as plt
 from python_vehicle_simulator.lib.path import PWLPath
 from math import pi
+from matplotlib.axes import Axes
 
 
 class MPCPathTrackingRevolt(IControl):
@@ -56,8 +57,9 @@ class MPCPathTrackingRevolt(IControl):
             actuator_params:Any,
             *args,
             horizon:int=20,
-            dt:float=0.02,
+            dt:float=0.2,
             tau_ext:Tuple=(0., 0., 0.),
+            gamma:float=1.0,
             **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -102,20 +104,22 @@ class MPCPathTrackingRevolt(IControl):
         # Hyperparameters
         self.huber_penalty_slope = 10 # delta
         self.huber_penalty_weight = 30 # q_x,y
-        self.heading_penalty_weight = 50 # q_psi
+        self.heading_penalty_weight = 50 # 50 # q_psi
         self.singular_value_penalty = 1e-3 # epsilon -> for nonsigular thruster configuration
-        self.singular_value_weight = 1e-5 # rho -> for nonsigular thruster configuration
+        self.singular_value_weight = 1e-5 # 1e-5 # rho -> for nonsigular thruster configuration
 
         self.Q = np.array([
             [1, 0, 0],
             [0, 10, 0],
             [0, 0, 10]
-        ]) # Velocity weight matrix
+        ]) * 1e0 # Velocity weight matrix
 
         self.Ra = np.eye(3) * 1e-2 # Azimuth weight matrix
-        self.Rf = np.eye(3) * 1e-1 # Force weight matrix
+        self.Rf = np.eye(3) * 1e-5 # 1e-1 # Force weight matrix
 
-        self.Theta_v = np.diag([1, 1, 1, 1, 1, 1]) # Terminal weight matrix
+        self.Theta_v = np.diag([1, 1, 1, 1, 1, 10])*0 # Terminal weight matrix
+
+        self.gamma = gamma
         
         self.init_nlp()
 
@@ -139,20 +143,21 @@ class MPCPathTrackingRevolt(IControl):
         """
         # Actuators
         tau_a = self.actuators_dynamics(uk, *args, **kwargs)
+        C = self.vessel_params.CRB(xk[3:6]) + self.vessel_params.CA(xk[3:6])
+        D = self.vessel_params.D
 
         # Vessel dynamics
         nu_dot = self.vessel_params.Minv @ (
-            tau_a -
+            tau_a +
             self.tau_ext -
-            self.vessel_params.CRB(xk[3:6]) @ xk[3:6] -
-            self.vessel_params.CA(xk[3:6]) @ xk[3:6] +
-            self.vessel_params.D @ xk[3:6]
+            C @ xk[3:6] -
+            D @ xk[3:6]
         )
         # nu_dot = self.vessel_params.dynamics(xk, tau_a-self.tau_ext)
 
         # Euler integration
         nukp1 = xk[3:6] + nu_dot * self.dt
-        eta_dot = ca.mtimes(R_casadi(xk[2]), nukp1)
+        eta_dot = ca.mtimes(R_casadi(xk[2]), xk[3:6])
         etakp1 = xk[0:3] + eta_dot * self.dt
         
         # Return next states
@@ -166,15 +171,7 @@ class MPCPathTrackingRevolt(IControl):
         
         Reinforcement learning-based NMPC for tracking control of ASVs:Theory and experiments (https://www.sciencedirect.com/science/article/pii/S0967066121002823)
         """
-        # print(pk_des, nu_des)
-        T = self.actuator_params.T(uk[3], uk[4], uk[5])
-        huber = self.huber_penalty_slope**2 * (ca.sqrt(1 + ((xk[0]-pk_des[0])**2 + (xk[1]-pk_des[1])**2) / self.huber_penalty_slope **2) - 1 ) 
-        heading = 0.5 * (1 - ca.cos(xk[2] - pk_des[2])) # It's not this weight that makes it crazy
-        singular_azimuth = 1 / (self.singular_value_penalty + ca.det(T @ T.T))
-        speed = (xk[3:6]-nu_des).T @ self.Q @ (xk[3:6]-nu_des)
-        alpha = uk[3:6].T @ self.Ra @ uk[3:6]
-        force = uk[0:3].T @ self.Rf @ uk[0:3]
-        return self.huber_penalty_weight * huber + self.heading_penalty_weight * heading + self.singular_value_weight * singular_azimuth + speed + alpha + force
+        return (self.gamma**k)*(self.huber_penalty_weight * self.huber_cost(xk, pk_des) + self.heading_penalty_weight * self.heading_cost(xk, pk_des) + self.singular_value_weight * self.singularity_cost(uk) + self.speed_cost(xk, nu_des) + self.alpha_cost(uk) + self.force_cost(uk))
         # return ca.mtimes(ca.transpose(xk[0:3]-np.array(pk_des)), xk[0:3]-np.array(pk_des))
 
     def __mayer__(self, xf:ca.SX, pf_des:Tuple[float, float, float], nu_des:np.ndarray, *args, sf:ca.SX=None, **kwargs) -> ca.SX:
@@ -183,6 +180,78 @@ class MPCPathTrackingRevolt(IControl):
 
     def __format_commands__(self, commands:np.ndarray, *args, **kwargs) -> List[np.ndarray]:
         return [np.array([commands[i+3], np.sqrt(commands[i]/self.actuator_params.k_pos[i]) if commands[i] >= 0 else -np.sqrt(-commands[i]/self.actuator_params.k_neg[i])]) for i in range(3)]
+
+    def huber_cost(self, xk:Any, pk_des:Tuple[float, float, float]) -> Any:
+        return self.huber_penalty_slope**2 * (ca.sqrt(1 + ((xk[0]-pk_des[0])**2 + (xk[1]-pk_des[1])**2) / self.huber_penalty_slope **2) - 1 ) 
+    
+    def heading_cost(self, xk:Any, pk_des:Tuple[float, float, float]) -> Any:
+        return 0.5 * (1 - ca.cos(xk[2] - pk_des[2])) # It's not this weight that makes it crazy
+    
+    def singularity_cost(self, uk:Any) -> Any:
+        T = self.actuator_params.T(uk[3], uk[4], uk[5])
+        return 1 / (self.singular_value_penalty + ca.det(T @ T.T))
+
+    def speed_cost(self, xk:Any, nu_des:np.ndarray) -> Any:
+        return (xk[3:6]-nu_des).T @ self.Q @ (xk[3:6]-nu_des)
+    
+    def alpha_cost(self, uk:Any) -> Any:
+        return uk[3:6].T @ self.Ra @ uk[3:6]
+    
+    def force_cost(self, uk:Any) -> Any:
+        return uk[0:3].T @ self.Rf @ uk[0:3]
+    
+    def eval_current_state(self, p0_des:np.ndarray, nu_des:np.ndarray) -> Dict:
+        x0, u0 = self.get_x_opt(0), self.get_u_actual_opt(0)
+        return {
+            'huber': self.huber_penalty_weight*self.huber_cost(x0, p0_des),
+            'heading': self.heading_penalty_weight*self.heading_cost(x0, p0_des),
+            'singularity': self.singular_value_weight*self.singularity_cost(u0),
+            'speed': self.speed_cost(x0, nu_des),
+            'alpha': self.alpha_cost(u0),
+            'force': self.force_cost(u0)
+        }
+
+    def eval_solution(self, nu_des:np.ndarray, path:List[Tuple[float, float, float]]) -> Dict:
+        """
+        Evaluate the current solution by computing the total cost of each term
+        """
+
+        huber, heading, singularity, speed, alpha, force = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        for k in range(self.horizon):
+            # print('\n################## k: ', k)
+            uk = self.get_u_actual_opt(k)
+            xk = self.get_x_opt(k)
+            pk_des = path[k]
+            # print("SHAPE: ", uk.shape, xk.shape)
+            
+            huber += (self.gamma**k)*self.huber_cost(xk, pk_des)
+            # print('huber: ', huber)
+            
+            heading += (self.gamma**k)*self.heading_cost(xk, pk_des)
+            # print('heading: ', heading)
+
+            singularity += (self.gamma**k)*self.singularity_cost(uk)
+            # print('singularity: ', singularity)
+
+            speed += (self.gamma**k)*self.speed_cost(xk, nu_des)
+            # print('speed: ', speed)
+
+            alpha += (self.gamma**k)*self.alpha_cost(uk)
+            # print('alpha: ', alpha)
+
+            force += (self.gamma**k)*self.force_cost(uk)
+            # print('force: ', force)
+
+        cost = {
+            'huber': self.huber_penalty_weight*huber,
+            'heading': self.heading_penalty_weight*heading,
+            'singularity': self.singular_value_weight*singularity,
+            'speed': speed,
+            'alpha': alpha,
+            'force': force
+        }
+
+        return cost
 
     def set_efficiency_constraints(self, efficiency:np.ndarray, *args, **kwargs) -> None:
         pass
@@ -240,7 +309,7 @@ class MPCPathTrackingRevolt(IControl):
             self.cost += self.__lagrange__(xk, uk, path[k], nu_des, *args, k=k, **kwargs)
         self.cost += self.__mayer__(self.get_x(k+1), path[k+1], nu_des, *args, **kwargs)
 
-    def get_initial_guess(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, mode:Literal['constant input', 'previous solution']='previous solution', **kwargs) -> Tuple[ca.DM, ca.DM]:        
+    def get_initial_guess(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, mode:Literal['constant input', 'previous solution']='constant input', **kwargs) -> Tuple[ca.DM, ca.DM]:        
         match mode:
             case 'constant input':
                 x_prev = x0.copy()
@@ -293,6 +362,7 @@ class MPCPathTrackingRevolt(IControl):
         return solver_out
 
     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, path:List[Tuple[float, float, float]], *args, initial_guess=None, u_prev_actual:np.ndarray=None, **kwargs) -> List[np.ndarray]:
+        # print("path length: ", len(path))
         x0 = np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]])
         nu_des = np.array([nu_des[0], nu_des[1], nu_des[5]])
         if self.u_prev_actual is None:
@@ -304,9 +374,13 @@ class MPCPathTrackingRevolt(IControl):
         # path = self.path.get_target_wpts_from(eta[0], eta[1], 0.1, self.horizon+1)
         initial_guess = initial_guess or self.get_initial_guess(x0, u_prev_actual, *args, **kwargs)
         self.set_cost(path, nu_des, *args, **kwargs) # stage & terminal cost
+        # print("u_prev_actual:", u_prev_actual)
         self.set_initial_constraints(x0, u_prev_actual, *args, **kwargs)
         self.solve(initial_guess, *args, **kwargs) # Solve for X, U, V
-        return self.__format_commands__(self.u_prev_setpoint, *args, **kwargs), {'horizon': self.horizon}
+        cost = self.eval_solution(nu_des, path)
+        current_cost = self.eval_current_state(path[0], nu_des)
+        info = {'horizon': self.horizon, 'psi_des': path[0][2], 'cost': cost, 'current_cost': current_cost, 'prediction': self.XOpt}
+        return self.__format_commands__(self.u_prev_setpoint, *args, **kwargs), info
     
     def reset(self):
         pass
@@ -319,6 +393,15 @@ class MPCPathTrackingRevolt(IControl):
     
     def get_u_setpoint(self, k) -> ca.SX:
         return self.USetpoint[k*self.Nu:(k+1)*self.Nu]
+    
+    def get_x_opt(self, k) -> ca.SX:
+        return self.XOpt[k]
+    
+    def get_u_actual_opt(self, k) -> ca.SX:
+        return self.UActualOpt[k]
+    
+    def get_u_setpoint_opt(self, k) -> ca.SX:
+        return self.USetpointOpt[k]
 
     @property
     def u_prev_actual(self) -> np.ndarray:
@@ -333,6 +416,12 @@ class MPCPathTrackingRevolt(IControl):
             return self.USetpointOpt[0]
         else:
             return None
+        
+    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+        if self.XOpt is None:
+            return ax
+        ax.scatter(self.XOpt[:, 1], self.XOpt[:, 0], c='green')
+        return ax
         
     def plot_results(self):
         """
