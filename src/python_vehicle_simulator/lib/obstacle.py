@@ -21,7 +21,7 @@ class Obstacle(IDrawable):
             geometry.append(geometry[0]) # close the shape
         self.geometry = np.array(geometry).T
 
-    def __plot__(self, ax, *args, **kwargs):
+    def __plot__(self, ax, *args, verbose:int=0, **kwargs):
         """
         x = East
         y = North

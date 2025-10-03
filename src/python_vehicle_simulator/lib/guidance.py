@@ -40,7 +40,7 @@ class IGuidance(IDrawable, ABC):
     def reset(self) :
         pass
 
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         return ax
 
     def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:

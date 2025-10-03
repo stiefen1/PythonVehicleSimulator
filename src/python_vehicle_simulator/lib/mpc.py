@@ -83,7 +83,8 @@ class MPCPathTrackingRevolt(IControl):
         self.ly = self.actuator_params.xy[:, 1]
         self.Ti = self.actuator_params.Ti
         self.T = self.actuator_params.T
-        self.efficiency = np.array([1.0, 1.0, 1.0]) # for FTC
+        self.delta_prev = None
+        # self.efficiency = np.array([1.0, 1.0, 1.0]) # for FTC
 
         # Force constraints
         self.lbf = self.actuator_params.f_min
@@ -106,7 +107,7 @@ class MPCPathTrackingRevolt(IControl):
         self.huber_penalty_weight = 30 # q_x,y
         self.heading_penalty_weight = 50 # 50 # q_psi
         self.singular_value_penalty = 1e-3 # epsilon -> for nonsigular thruster configuration
-        self.singular_value_weight = 1e-5 # 1e-5 # rho -> for nonsigular thruster configuration
+        self.singular_value_weight = 8e-4 # 1e-9 #  5e-4 # 1e-5 # rho -> for nonsigular thruster configuration
 
         self.Q = np.array([
             [1, 0, 0],
@@ -123,7 +124,7 @@ class MPCPathTrackingRevolt(IControl):
         
         self.init_nlp()
 
-    def actuators_dynamics(self, uk:ca.SX, *args, **kwargs) -> ca.SX:
+    def actuators_dynamics(self, uk:ca.SX, efficiency:ca.SX, *args, **kwargs) -> ca.SX:
         """
         Compute the total generalized force based on thruster's forces and azimuth angles
         """
@@ -131,10 +132,10 @@ class MPCPathTrackingRevolt(IControl):
         # This should be in the actuator configuration, as a single matrix
         tau_a = ca.SX([0., 0., 0.])
         for i in range(3): 
-            tau_a += self.Ti(uk[i+3], self.lx[i], self.ly[i]) * uk[i] * self.efficiency[i]
+            tau_a += self.Ti(uk[i+3], self.lx[i], self.ly[i]) * uk[i] * efficiency[i]
         return tau_a
 
-    def dynamics(self, xk:ca.SX, uk:ca.SX, *args, **kwargs) -> ca.SX:
+    def dynamics(self, xk:ca.SX, uk:ca.SX, efficiency:ca.SX, *args, **kwargs) -> ca.SX:
         """
         xk : etak, nuk = n, e, psi, u, v, r
         uk : fk, alphak = f1, f2, f3, a1, a2, a3
@@ -142,7 +143,7 @@ class MPCPathTrackingRevolt(IControl):
         Input commands are the ACTUAL VALUES ***NOT*** SETPOINTS
         """
         # Actuators
-        tau_a = self.actuators_dynamics(uk, *args, **kwargs)
+        tau_a = self.actuators_dynamics(uk, efficiency, *args, **kwargs)
         C = self.vessel_params.CRB(xk[3:6]) + self.vessel_params.CA(xk[3:6])
         D = self.vessel_params.D
 
@@ -251,10 +252,7 @@ class MPCPathTrackingRevolt(IControl):
             'force': force
         }
 
-        return cost
-
-    def set_efficiency_constraints(self, efficiency:np.ndarray, *args, **kwargs) -> None:
-        pass
+        return cost       
 
     def set_dynamic_constraints(self, *args, **kwargs) -> None:
         """
@@ -263,8 +261,9 @@ class MPCPathTrackingRevolt(IControl):
         ## Vessel
         self.dynamic_constraints = ca.SX.nan(self.Nx) # self.get_x(0) # Reserve space for constraint x(0) = 0 to be set at runtime
         self.dynamic_actuator_constraints = ca.SX.nan(self.Nu) #self.get_u(0) # Reserve space for initial (delta) input constraint
+        self.efficiency_constraints = ca.SX.nan(3)
         for k in range(0, self.horizon):
-            self.dynamic_constraints = ca.vertcat(self.dynamic_constraints, self.get_x(k+1) - self.dynamics(self.get_x(k), self.get_u_actual(k), *args, **kwargs))
+            self.dynamic_constraints = ca.vertcat(self.dynamic_constraints, self.get_x(k+1) - self.dynamics(self.get_x(k), self.get_u_actual(k), self.efficiency, *args, **kwargs))
         
         # Consider time constant for actuator dynamics
         for k in range(0, self.horizon-1):
@@ -274,6 +273,8 @@ class MPCPathTrackingRevolt(IControl):
         self.UBDynamics = np.array([self.Nx*[0.0]]).repeat(self.horizon + 1, axis=0).flatten().tolist() # Upper Bound Dynamics, including 0 <= x(0) - x0 <= 0
         self.LBActuatorsDynamics = np.array([self.Nu*[0.0]]).repeat(self.horizon, axis=0).flatten().tolist()
         self.UBActuatorsDynamics = np.array([self.Nu*[0.0]]).repeat(self.horizon, axis=0).flatten().tolist()
+        self.LBActuatorEfficiencyConstraints = [0, 0, 0]
+        self.UBActuatorEfficiencyConstraints = [0, 0, 0]
 
 
     def set_states_and_commands_constraints(self, *args, **kwargs) -> None:
@@ -283,6 +284,9 @@ class MPCPathTrackingRevolt(IControl):
         # Actual forces & angles
         self.LBUA = self.lbu[None, :].repeat(self.horizon, axis=0).flatten().tolist()
         self.UBUA = self.ubu[None, :].repeat(self.horizon, axis=0).flatten().tolist()
+        # Efficiency
+        self.LBEfficiency = [0, 0, 0]
+        self.UBEfficiency = [1, 1, 1]
 
 
     def init_nlp(self, *args, **kwargs) -> None:
@@ -293,6 +297,7 @@ class MPCPathTrackingRevolt(IControl):
         self.X = ca.SX.sym("X", self.Nx * (self.horizon + 1))   # States
         self.UActual = ca.SX.sym("UActual", self.Nu * self.horizon)   # Actual command input
         self.USetpoint = ca.SX.sym("USetpoint", self.Nu * self.horizon) # Setpoint command input
+        self.efficiency = ca.SX.sym("efficiency", 3)
 
         # Constraints
         self.set_states_and_commands_constraints(*args, **kwargs)   # x_k \in X, u_k \in U
@@ -309,7 +314,7 @@ class MPCPathTrackingRevolt(IControl):
             self.cost += self.__lagrange__(xk, uk, path[k], nu_des, *args, k=k, **kwargs)
         self.cost += self.__mayer__(self.get_x(k+1), path[k+1], nu_des, *args, **kwargs)
 
-    def get_initial_guess(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, mode:Literal['constant input', 'previous solution']='constant input', **kwargs) -> Tuple[ca.DM, ca.DM]:        
+    def get_initial_guess(self, x0:np.ndarray, u_prev_actual:np.ndarray, efficiency:np.ndarray, *args, mode:Literal['constant input', 'previous solution']='constant input', **kwargs) -> Tuple[ca.DM, ca.DM]:        
         match mode:
             case 'constant input':
                 x_prev = x0.copy()
@@ -317,36 +322,37 @@ class MPCPathTrackingRevolt(IControl):
 
                 U0Actual = []
                 for _ in range(0, self.horizon):
-                    x = self.dynamics(x_prev, u_prev_actual)
+                    x = self.dynamics(x_prev, u_prev_actual, efficiency)
                     X0 = ca.vertcat(X0, x)
                     U0Actual = ca.vertcat(U0Actual, u_prev_actual)
 
-                return ca.DM(ca.vertcat(X0, U0Actual, U0Actual)) # Assumption: Actual command = setpoint (steady state)
+                return ca.DM(ca.vertcat(X0, U0Actual, U0Actual, efficiency)) # Assumption: Actual command = setpoint (steady state)
             case 'previous solution':
                 if self.XOpt is None:
-                    return self.get_initial_guess(x0, u_prev_actual, *args, mode='constant input', **kwargs)
-                X0 = ca.vertcat(self.XOpt[1::].reshape(-1), self.dynamics(self.XOpt[-1], self.UActualOpt[-1])) # Assume N-th input is equal to N-1-th input
+                    return self.get_initial_guess(x0, u_prev_actual, efficiency, *args, mode='constant input', **kwargs)
+                X0 = ca.vertcat(self.XOpt[1::].reshape(-1), self.dynamics(self.XOpt[-1], self.UActualOpt[-1], efficiency)) # Assume N-th input is equal to N-1-th input
                 U0Actual = ca.vertcat(self.UActualOpt[1::].reshape(-1), self.UActualOpt[-1])
                 U0Setpoint = ca.vertcat(self.USetpointOpt[1::].reshape(-1), self.USetpointOpt[-1])
-                return ca.DM(ca.vertcat(X0, U0Actual, U0Setpoint))
+                return ca.DM(ca.vertcat(X0, U0Actual, U0Setpoint, efficiency))
 
-    def set_initial_constraints(self, x0:np.ndarray, u_prev_actual:np.ndarray, *args, **kwargs) -> None:       
+    def set_initial_constraints(self, x0:np.ndarray, u_prev_actual:np.ndarray, efficiency:np.ndarray, *args, **kwargs) -> None:       
         self.dynamic_constraints[0:self.Nx] = self.get_x(0) - x0 # Replace first constraint
         self.dynamic_actuator_constraints[0:self.Nu] = self.get_u_actual(0) - u_prev_actual - self.actuators_dt * (self.get_u_setpoint(0) - u_prev_actual) / self.actuators_time_constant 
+        self.efficiency_constraints[0:3] = self.efficiency - efficiency
 
     def solve(self, initial_guess, options:dict={'ipopt.print_level':0, 'print_time':0}, *args, **kwargs) -> Dict:
         nlp = {
-            "x": ca.vertcat(self.X, self.UActual, self.USetpoint),
+            "x": ca.vertcat(self.X, self.UActual, self.USetpoint, self.efficiency),
             "f": self.cost,
-            "g": ca.vertcat(self.dynamic_constraints, self.dynamic_actuator_constraints)
+            "g": ca.vertcat(self.dynamic_constraints, self.dynamic_actuator_constraints, self.efficiency_constraints)
         }
 
         solver_in = {
             "x0": initial_guess,
-            "lbx": self.LBX + self.LBUA + self.LBUA, #  + self.LBFS + self.LBAS,
-            "ubx": self.UBX + self.UBUA + self.UBUA, # + self.UBFS + self.UBAS,
-            "lbg": self.LBDynamics + self.LBActuatorsDynamics, # + self.LBObstacles,
-            "ubg": self.UBDynamics + self.UBActuatorsDynamics  # + self.UBObstacles
+            "lbx": self.LBX + self.LBUA + self.LBUA + self.LBEfficiency, #  + self.LBFS + self.LBAS,
+            "ubx": self.UBX + self.UBUA + self.UBUA + self.UBEfficiency, # + self.UBFS + self.UBAS,
+            "lbg": self.LBDynamics + self.LBActuatorsDynamics + self.LBActuatorEfficiencyConstraints, # + self.LBObstacles,
+            "ubg": self.UBDynamics + self.UBActuatorsDynamics + self.UBActuatorEfficiencyConstraints # + self.UBObstacles
         }
 
         self.solver = ca.nlpsol("mpc_solver", "ipopt", nlp, options)
@@ -361,8 +367,9 @@ class MPCPathTrackingRevolt(IControl):
         self.ActuatorDynamicsConstraintsOpt = g[(self.horizon+1)*self.Nx:(self.horizon+1)*self.Nx+self.horizon*self.Nu]
         return solver_out
 
-    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, path:List[Tuple[float, float, float]], *args, initial_guess=None, u_prev_actual:np.ndarray=None, **kwargs) -> List[np.ndarray]:
-        # print("path length: ", len(path))
+    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, path:List[Tuple[float, float, float]], *args, delta=np.array([1, 1, 1]), sigma:np.ndarray=None, initial_guess=None, u_prev_actual:np.ndarray=None, **kwargs) -> List[np.ndarray]:
+        delta = np.array([1, 1, 1]) # disable adaptive MPC
+
         x0 = np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]])
         nu_des = np.array([nu_des[0], nu_des[1], nu_des[5]])
         if self.u_prev_actual is None:
@@ -372,10 +379,16 @@ class MPCPathTrackingRevolt(IControl):
             u_prev_actual = self.u_prev_actual.copy()
 
         # path = self.path.get_target_wpts_from(eta[0], eta[1], 0.1, self.horizon+1)
-        initial_guess = initial_guess or self.get_initial_guess(x0, u_prev_actual, *args, **kwargs)
+        initial_guess = initial_guess or self.get_initial_guess(x0, u_prev_actual, delta, *args, **kwargs)
+
+        # if sigma is not None:
+        #     self.singular_value_weight = 0.5 * (1e-3 * np.linalg.norm(sigma) / 0.1) + 0.5 * self.singular_value_weight
+
+        # print(self.singular_value_weight)
+
         self.set_cost(path, nu_des, *args, **kwargs) # stage & terminal cost
         # print("u_prev_actual:", u_prev_actual)
-        self.set_initial_constraints(x0, u_prev_actual, *args, **kwargs)
+        self.set_initial_constraints(x0, u_prev_actual, efficiency=delta, *args, **kwargs)
         self.solve(initial_guess, *args, **kwargs) # Solve for X, U, V
         cost = self.eval_solution(nu_des, path)
         current_cost = self.eval_current_state(path[0], nu_des)
@@ -417,7 +430,7 @@ class MPCPathTrackingRevolt(IControl):
         else:
             return None
         
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         if self.XOpt is None:
             return ax
         ax.scatter(self.XOpt[:, 1], self.XOpt[:, 0], c='green')

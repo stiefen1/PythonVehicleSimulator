@@ -121,22 +121,32 @@ class IVessel(IDrawable):
         self.tau_actuators = tau_actuators.copy()
         return (measurements, 0, False, False, {}, False)
     
-    def reset(self):
+    def reset(self, random:bool=False, seed=None, eta_min:np.ndarray=None, eta_max:np.ndarray=None, nu_min:np.ndarray=None, nu_max:np.ndarray=None):
         for actuator in self.actuators:
-            actuator.reset()
+            actuator.reset(random=random, seed=seed)
 
         self.guidance.reset()
         self.navigation.reset()
         self.control.reset()
+
+        # Set to initialize value by default
         self.eta = deepcopy(self._eta_0)
         self.nu = deepcopy(self._nu_0)
+
+        if random: # if random sampling is asked, eta_min, et_max, nu_min, nu_max must be specified. Otherwise keep default values
+            np.random.seed(seed=seed)
+            if eta_min is not None and eta_max is not None:
+                self.eta = Eta(*np.random.uniform(eta_min, eta_max).tolist())
+            if nu_min is not None and nu_max is not None:
+                self.nu = Nu(*np.random.uniform(nu_min, nu_max).tolist())
+
 
     def eta_dot(self, nu:np.ndarray):
         p_dot   = np.matmul( Rzyx(*self.eta.to_list()[3:6]), nu[0:3] ) 
         v_dot   = np.matmul( Tzyx(*self.eta.to_list()[3:5]), nu[3:6] )
         return np.concatenate([p_dot, v_dot])
 
-    def __plot__(self, ax, *args, **kwargs):
+    def __plot__(self, ax, *args, verbose:int=0, **kwargs):
         """
         x = East
         y = North
@@ -147,6 +157,8 @@ class IVessel(IDrawable):
         else:
             ax.scatter(self.eta[1], self.eta[0], *args, **kwargs)
             ax.plot(*self.geometry_for_2D_plot, *args, **kwargs)
+            for actuator in self.actuators:
+                actuator.plot(ax=ax, eta=self.eta.to_numpy(), *args, verbose=verbose, **kwargs)
         return ax
 
     def __scatter__(self, ax, *args, **kwargs):

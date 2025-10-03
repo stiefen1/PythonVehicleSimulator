@@ -1,13 +1,14 @@
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
+from typing import List, Tuple
 
 class IDrawable(ABC):
     def __init__(self, *args, verbose_level:int=0, **kwargs):
         self.verbose_level = verbose_level
 
     @abstractmethod
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         pass
 
     @abstractmethod
@@ -26,7 +27,7 @@ class IDrawable(ABC):
                 if isinstance(item, IDrawable):
                     # If object is a drawable, plot all sub objects
                     item.plot(*args, ax=ax, verbose=verbose, **kwargs)
-            return self.__plot__(*args, ax=ax, **kwargs)
+            return self.__plot__(*args, ax=ax, verbose=verbose, **kwargs)
         else:
             return ax
     

@@ -2,6 +2,7 @@ import numpy as np
 from typing import Callable
 from abc import ABC, abstractmethod
 
+
 class KalmanFilter:
     """
     Linear Kalman Filter
@@ -126,16 +127,22 @@ class EKFRevolt3(IExtendedKalmanFilter):
 
     CURRENTLY THIS KALMAN TAKES GENREALIZED FROCES AS INPUT BUT IT PREVENTS IT FROM BEING TESTED FOR ACTUATOR FAULTS, BECAUSE IT DOES NOT
     INCLUDE THE ACTUATION MODEL. -> WE HAVE TO CHANGE IT.
+
+    According to https://ntnuopen.ntnu.no/ntnu-xmlui/handle/11250/2452115, measurement uncertainties for ReVolt are:
+
+    heading +- 0.2°
+    position +- 1cm
+    u, v, r += 0.05
     
     """
     def __init__(
             self,
             x0:np.ndarray,
             dt:float,
-            *args,
             Q:np.ndarray,
             R:np.ndarray,
             P0:np.ndarray,
+            *args,
             **kwargs
             ):
         super().__init__(Q, R, x0, P0, dt, *args, **kwargs)

@@ -15,6 +15,15 @@ from python_vehicle_simulator.utils.math_fn import Rzyx
 from python_vehicle_simulator.lib.filter import LowPass
 from python_vehicle_simulator.lib.kalman import EKFRevolt3
 
+# According to https://ntnuopen.ntnu.no/ntnu-xmlui/handle/11250/2452115, measurement uncertainties for ReVolt are:
+
+#         heading +- 0.2°
+#         position +- 1cm
+#         u, v +- 0.05 m/s
+#         r not specified, assuming it is very low according to graph. let's say r +- 0.05 deg/s as well
+Q_REVOLT = np.diag([0.3**2, 0.3**2, (0.4*np.pi/180)**2, 0.02**2, 0.02**2, 15*np.pi/180/3600])
+R_REVOLT = np.diag([1e-2, 1e-2, 0.2*np.pi/180, 5e-2, 5e-2, 5e-2])
+
 
 class INavigation(IDrawable, ABC):
     def __init__(
@@ -52,7 +61,7 @@ class INavigation(IDrawable, ABC):
     def reset(self):
         pass
 
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         return ax
 
     def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:
@@ -120,7 +129,7 @@ class NavigationTOF(INavigation):
     def reset(self):
         pass
 
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         if self.last_observation is None:
             return ax
         
@@ -163,10 +172,9 @@ class NavigationWithNoise(INavigation):
 
         if std is None:
             self.std = {
-                'eta': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.5, # [-1, 1] * 0.2 
-                'nu': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.1 # [-1, 1] * 0.1
+                'eta' : np.array([R_REVOLT[0, 0], R_REVOLT[1, 1], 0, 0, 0, R_REVOLT[2, 2]]),
+                'nu' : np.array([R_REVOLT[3, 3], R_REVOLT[4, 4], 0, 0, 0, R_REVOLT[5, 5]])
             }
-            self.std['eta'][5] = 0.05
 
         self.n_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=eta[0])
         self.e_filter = LowPass(cutoff=1e-1, sampling_frequency=10e0, order=5, init=eta[1])
@@ -210,7 +218,7 @@ class NavigationWithNoise(INavigation):
     def reset(self):
         pass
 
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         if self.last_observation is None:
             return ax
         
@@ -230,14 +238,22 @@ class NavigationWithNoise(INavigation):
         return ax
 
 class NavigationRevolt3WithEKF(INavigation):
+    """
+        According to https://ntnuopen.ntnu.no/ntnu-xmlui/handle/11250/2452115, measurement uncertainties for ReVolt are:
+
+        heading +- 0.2°
+        position +- 1cm
+        u, v +- 0.05 m/s
+        r not specified, assuming it is very low according to graph. let's say r +- 0.05 deg/s as well
+    """
     def __init__(
             self,
             eta:np.ndarray,
             nu:np.ndarray,
             dt:float,
             *args,
-            Q:np.ndarray = np.eye(6)*1e-5,
-            R:np.ndarray = np.eye(6)*0.25,
+            Q:np.ndarray = Q_REVOLT,
+            R:np.ndarray = R_REVOLT,
             P0:np.ndarray = np.eye(6),
             offset=None,
             std=None,
@@ -252,10 +268,14 @@ class NavigationRevolt3WithEKF(INavigation):
 
         if std is None:
             self.std = {
-                'eta': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.5, # [-1, 1] * 0.5 
-                'nu': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.1 # [-1, 1] * 0.1
+                'eta' : np.array([R[0, 0], R[1, 1], 0, 0, 0, R[2, 2]]),
+                'nu' : np.array([R[3, 3], R[4, 4], 0, 0, 0, R[5, 5]])
             }
-            self.std['eta'][5] = 0.05
+            # self.std = {
+            #     'eta': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.5, # [-1, 1] * 0.5 
+            #     'nu': (np.abs(np.random.random(size=(6,))-0.5)) * 2 * 0.1 # [-1, 1] * 0.1
+            # }
+            # self.std['eta'][5] = 0.05
 
         self.ekf = EKFRevolt3(Q=Q, R=R, x0=np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]]), P0=P0, dt=dt)
         
@@ -288,7 +308,7 @@ class NavigationRevolt3WithEKF(INavigation):
     def reset(self):
         pass
 
-    def __plot__(self, ax:Axes, *args, **kwargs) -> Axes:
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         if self.last_observation is None:
             return ax
         

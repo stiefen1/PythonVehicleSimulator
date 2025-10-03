@@ -5,10 +5,11 @@ from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.lib.weather import Wind, Current
 from python_vehicle_simulator.utils.math_fn import ssa
 import matplotlib.pyplot as plt
+from python_vehicle_simulator.lib.path import PWLPath
 
 
 
-class GymNavEnv(gym.Env):
+class GymPathTrackingBlueBoatEnv(gym.Env):
     def __init__(
             self,
             own_vessel:IVessel,
@@ -16,20 +17,24 @@ class GymNavEnv(gym.Env):
             obstacles:List[Obstacle],
             wind:Wind,
             current:Current,    
-            render_mode:Literal['human', 'human3d']=None        
+            render_mode:Literal['human', 'human3d']=None,
+            path_params:Dict={'d_tot':50, 'max_turn_deg':30, 'seg_len_range': (5, 10), 'start': (0, 0), 'initial_angle':0},
+            desired_speed_range:Tuple=(0.2, 0.7),
+            horizon:int=20
     ):
         self.own_vessel = own_vessel
         self.target_vessels = target_vessels
         self.obstacles = obstacles
         self.wind = wind
         self.current = current
+        self.path_params = path_params
+        self.desired_speed_range = desired_speed_range
+        self.horizon = horizon
 
         self.init_action_space()
         self.init_observation_space()
 
-        # self.min_dist = 1.0 # distance to terminate episode
         self.safety_radius = 2.5
-        # self.target_range = {'n': (-20, 20), 'e': (-20, 20)}
 
         self.action_repeat = 10 # dt is 0.02 so this make the RL frequency 1/(10*0.02) = 1/0.2 = 5Hz
 
@@ -41,16 +46,57 @@ class GymNavEnv(gym.Env):
 
         # Current step (for plot purpose)
         self._step = 0
-        self.max_steps = 500 # i.e. 100 seconds for dt=0.02 and action_repeat=10
+        self.max_steps = 200 # i.e. 100 seconds for dt=0.02 and action_repeat=10
 
         # observation space
-        self.ne_range = {"min": np.array([-50, -50]), "max": np.array([50, 50])}
-        self.uvr_range = {"min": np.array([-50, -50, -10]), "max": np.array([50, 50, 10])}
-        self.rel_target_range = {"min":np.array([-50, -50]), "max": np.array([50, 50])}
-        self.rel_yaw_range = {"min": np.array([-np.pi]), "max": np.array([np.pi])}
+        self.ne_range = {"min": np.array(2*[-self.path_params['d_tot']]), "max": np.array(2*[self.path_params['d_tot']])}
+        self.uvr_range = {"min": np.array([-10, -10, -10]), "max": np.array([10, 10, 10])}
+        self.rel_target_range = {"min":np.array(self.horizon*[0]), "max": np.array(self.horizon*[self.path_params['d_tot']])} # relative distance to a point of the horizon
+        self.rel_yaw_range = {"min": np.array(self.horizon*[-np.pi]), "max": np.array(self.horizon*[np.pi])} # relative bearing angle to a point of the horizon
+        self.speed_error_range = {"min": np.array([-3*self.desired_speed_range[1]]), "max": np.array([3*self.desired_speed_range[1]])}
 
         # Reward function
-        self.delta = 0.1
+        self.huber_penalty_slope = 10 # delta
+        self.huber_penalty_weight = 30 # q_x,y
+        self.heading_penalty_weight = 50 # 50 # q_psi
+        self.singular_value_penalty = 1e-3 # epsilon -> for nonsigular thruster configuration
+        self.singular_value_weight = 1e-5 # 1e-5 # rho -> for nonsigular thruster configuration
+
+        self.Q = np.array([
+            [10, 0, 0],
+            [0, 10, 0],
+            [0, 0, 10]
+        ]) # Velocity weight matrix
+
+        self.Ra = np.eye(2) * 1e-2 # Azimuth weight matrix
+        self.Rf = np.eye(2) * 1e-8 # 1e-1 # Force weight matrix
+
+    def cost_tracking(self, p:np.ndarray, p_d:np.ndarray) -> float:
+        return float(self.huber_penalty_slope**2 * (np.sqrt(1 + ((p[0:2]-p_d[0:2]).T @ (p[0:2]-p_d[0:2])) / self.huber_penalty_slope**2) - 1))
+    
+    def cost_heading(self, psi:float, psi_d:float) -> float:
+        return float((1 - np.cos(psi - psi_d)) / 2)
+    
+    def cost_speed(self, nu:np.ndarray, nu_d:np.ndarray) -> float:
+        return float((nu-nu_d).T @ self.Q @ (nu-nu_d))
+    
+    def cost_alpha(self, alpha:np.ndarray) -> float:
+        return alpha.T @ self.Ra @ alpha
+    
+    def cost_force(self, force:np.ndarray) -> float:
+        return force.T @ self.Rf @ force
+    
+    # def cost_singular_alpha(self, alpha:np.ndarray) -> float:
+    #     return 0
+    
+    def cost(self, eta:np.ndarray, nu:np.ndarray, eta_d:np.ndarray, nu_d:np.ndarray, force:np.ndarray, alpha:np.ndarray=np.array([0, 0, 0])) -> float:
+        cost = self.huber_penalty_weight * self.cost_tracking(eta[0:2], eta_d[0:2])
+        cost += self.heading_penalty_weight * self.cost_heading(eta[2], eta_d[2])
+        cost += self.singular_value_weight * 0
+        cost += self.cost_speed(nu, nu_d)
+        cost += self.cost_alpha(alpha)
+        cost += self.cost_force(force)
+        return cost
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[Dict, Dict]:
         """Start a new episode.
@@ -72,7 +118,8 @@ class GymNavEnv(gym.Env):
             target_vessel.reset()
 
         # Sample a new target position in [-20, 20] x [-20, 20]
-        self.target = self.np_random.uniform(-30, 30, size=2)
+        self.path = PWLPath.sample(**self.path_params, seed=seed)
+        self.desired_speed = float(np.random.uniform(*self.desired_speed_range))
 
         observation = self._get_obs()
         info = self._get_info()
@@ -110,7 +157,7 @@ class GymNavEnv(gym.Env):
         # Get observation
         observation = self._get_obs()
 
-        # Check for collisions
+        # Check for collisions with environment
         terminated = self.collision()
 
         # We don't use truncation in this simple environment
@@ -122,37 +169,19 @@ class GymNavEnv(gym.Env):
         return observation, reward, terminated, truncated, info
 
     def reward(self) -> float:
-        # I want to reward the vessel for being alive and terminate an episode if it gets outside of my map
-        # -> constant reward at each timestamp.
-        # -> No termination condition when close to the target
+        eta = np.array(self.own_vessel.eta.neyaw)
+        nu = np.array(self.own_vessel.nu.uvr)
+        eta_d = np.array(self.path.get_target_wpts_from(eta[0], eta[1], 0, 1)[0]) # dp is wrong but we don't care because we only take the first point
+        nu_d = np.array([self.desired_speed, 0, 0])
+        force = np.array([actuator.thrust for actuator in self.own_vessel.actuators])
+        alpha = np.array([0, 0])
+        return np.exp(-self.cost(eta, nu, eta_d, nu_d, force, alpha)/10)
 
-        # This one worked better:
-        return (
-            1 -
-            (self.dist_to_target()/100) #+
-            # np.min([0, self.own_vessel.nu[0]])
-        )
-
-        # (Reinforcement learning-based NMPC for tracking control of ASVs: Theory and experiments)
-        # first suggested in (NMPC based on Huber Penalty Functions to Handle Large Deviations of Quadrature States) from Gros & Diehl
-        # Consider pseudo-Huber function for better numerical stability:
-        # return (self.delta**2)*(np.sqrt(1+(self.dist_to_target()/self.delta)**2)-1)
-
-        # return np.exp(-self.dist_to_target()/100) # \in [0, 1]. equal to 1 if distance is zero, otherwise decreases ----------------> Ca ne pénalise pas assez violemment le fait de ne pas être proche, le bateau fait des courbes dans tous les sens.
-        # return np.exp(-self.dist_to_target()/10) # Plus grande pénalité, au début le bateau part en arrière et fait des courbes dans tous les sens -> pénalité pour qu'il aille vers l'avant ?
-
-        # Maybe think about a more complex cost where heading error is penalized as well
-
-        # if distance <= 10 we start rewarding, otherwise penalize. If collision, add huge penalty
-        # return 1-((self.dist_to_target()/30)**2) if not self.collision() else -10000 # np.exp(-self.dist_to_target()/30) if not self.collision() else -1000
-    
     def dist_to_target(self) -> float:
         ne = np.array(self.own_vessel.eta.neyaw[0:2])
-        return np.linalg.norm(ne-self.target)
+        target = np.array(self.path.closest_point(ne[0], ne[1]))
+        return np.linalg.norm(ne-target)
 
-    # def target_reached(self) -> bool:
-    #     return True if self.dist_to_target() <= self.min_dist else False
-    
     def collision(self) -> bool:
         if np.any(self.own_vessel.eta.to_numpy()[0:2] > 50) or np.any(self.own_vessel.eta.to_numpy()[0:2] < -50):
             return True
@@ -170,20 +199,27 @@ class GymNavEnv(gym.Env):
         # Get raw values
         ne = np.array([self.own_vessel.eta.n, self.own_vessel.eta.e])
         uvr = np.array(self.own_vessel.nu.uvr)
-        delta = self.target - ne
-        rel_yaw = np.array([ssa(self.own_vessel.eta[5] + np.atan2(-delta[1], delta[0]))])
+        distances, rel_yaws = [], []
+        for target in self.path.get_target_wpts_from(ne[0], ne[1], self.action_repeat*self.own_vessel.dt*self.desired_speed, self.horizon):
+            delta = target[0:2] - ne
+            distance = float(np.linalg.norm(delta))
+            rel_yaw = ssa(self.own_vessel.eta[5] + np.atan2(-delta[1], delta[0]))
+            distances.append(distance)
+            rel_yaws.append(rel_yaw)
 
         # Normalize each and cast to float32
         ne_norm = self._normalize(ne, self.ne_range["min"], self.ne_range["max"]).astype(np.float32)
         uvr_norm = self._normalize(uvr, self.uvr_range["min"], self.uvr_range["max"]).astype(np.float32)
-        rel_target_norm = self._normalize(delta, self.rel_target_range["min"], self.rel_target_range["max"]).astype(np.float32)
-        rel_yaw_norm = self._normalize(rel_yaw, self.rel_yaw_range["min"], self.rel_yaw_range["max"]).astype(np.float32)
+        rel_target_norm = self._normalize(np.array(distances), self.rel_target_range["min"], self.rel_target_range["max"]).astype(np.float32)
+        rel_yaw_norm = self._normalize(np.array(rel_yaws), self.rel_yaw_range["min"], self.rel_yaw_range["max"]).astype(np.float32)
+        speed_error_norm = self._normalize(np.array(self.own_vessel.nu.u - self.desired_speed), self.speed_error_range["min"], self.speed_error_range["max"]).astype(np.float32)
 
         return {
             "ne": ne_norm,
             "uvr": uvr_norm,
             "rel_target": rel_target_norm,
-            "rel_yaw": rel_yaw_norm
+            "rel_yaw": rel_yaw_norm,
+            "speed_error": speed_error_norm
         }
     
     def _get_info(self) -> Dict:
@@ -216,52 +252,45 @@ class GymNavEnv(gym.Env):
             {
                 "ne": gym.spaces.Box(-1.0, 1.0, shape=(2,)),            # Because we want the vessel to remain within bounds
                 "uvr": gym.spaces.Box(-1.0, 1.0, shape=(3,)),           # Surge-Sway-YawRate
-                "rel_target": gym.spaces.Box(-1.0, 1.0, shape=(2,)),    # Easier to figure out using relative pose
-                "rel_yaw": gym.spaces.Box(-1.0, 1.0, shape=(1,))        
+                "rel_target": gym.spaces.Box(-1.0, 1.0, shape=(self.horizon,)),    # Easier to figure out using relative pose
+                "rel_yaw": gym.spaces.Box(-1.0, 1.0, shape=(self.horizon,))  ,
+                "speed_error": gym.spaces.Box(-1.0, 1.0, shape=(1,))      
             }
         )
 
     def render(self, mode=None):
         mode = mode or self.render_mode
-        if mode not in ("human", "human3d"):
+
+        if mode is None or mode not in ("human"):
             return
 
         if self.fig is None or self.ax is None:
             self.fig = plt.figure()
-            if mode == "human3d":
-                self.ax = self.fig.add_subplot(111, projection='3d')
-                self.vessel_plot, = self.ax.plot([], [], [], label='Vessel')
-                self.ax.set_xlim(-30, 30)
-                self.ax.set_ylim(-30, 30)
-                self.ax.set_zlim(-10, 10)
-                self.ax.set_xlabel('East')
-                self.ax.set_ylabel('North')
-                self.ax.set_zlabel('-Down')
-                self.ax.scatter3D(*np.flip(self.target), zs=0, c='red')
-            else:
-                self.ax = self.fig.add_subplot(111)
-                self.vessel_plot, = self.ax.plot([], [], label='Vessel')
-                self.ax.set_xlim(-30, 30)
-                self.ax.set_ylim(-30, 30)
-                self.ax.scatter(*np.flip(self.target), c='red')
-                self.ax.set_xlabel('East')
-                self.ax.set_ylabel('North')
-                
+            self.ax = self.fig.add_subplot(111)
+            self.vessel_plot, = self.ax.plot([], [], label='Vessel')
+            # Use plot instead of scatter for waypoints
+            self.path_plot, = self.ax.plot([], [], 'go', markersize=3, label='Target Waypoints')
+            self.ax.set_xlim(-30, 30)
+            self.ax.set_ylim(-30, 30)
+            self.path.plot(ax=self.ax)
+            self.ax.set_xlabel('East')
+            self.ax.set_ylabel('North')
+            
             self.ax.legend()
             plt.ion()
             plt.show()
 
-        # Assuming vessel position is self.own_vessel.eta.e, .n, .d
-        # x = self.own_vessel.eta.e
-        # y = self.own_vessel.eta.n
-        # z = getattr(self.own_vessel.eta, 'd', 0.0)
-        if mode == "human3d":
-            geometry = self.own_vessel.geometry_for_3D_plot
-            self.vessel_plot.set_data(*geometry[0:2])
-            self.vessel_plot.set_3d_properties(geometry[2])
+        print(self.own_vessel.nu.uvr[0], self.desired_speed)
+        self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
+        
+        # Update waypoints using set_data (works with Line2D objects)
+        wpts = self.path.get_target_wpts_from(*self.own_vessel.eta.ned[0:2], self.action_repeat*self.desired_speed*self.own_vessel.dt, self.horizon)
+        if wpts:
+            self.path_plot.set_data([wpt[1] for wpt in wpts], [wpt[0] for wpt in wpts])
         else:
-            self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
-        self.ax.set_title(f"Step: {self._step}")
+            self.path_plot.set_data([], [])
+        
+        self.ax.set_title(f"Time: {self._step*self.action_repeat*self.own_vessel.dt:.1f} [s]")
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
     
@@ -289,7 +318,7 @@ def check_environment() -> None:
         actuators=[Thruster(xy=(0, 0.395), **vars(thruster_params)), Thruster(xy=(0, -0.395), **vars(thruster_params))]
     )
 
-    env = GymNavEnv(
+    env = GymPathTrackingBlueBoatEnv(
         own_vessel=otter,
         target_vessels=[],
         obstacles=[],
@@ -303,5 +332,14 @@ def check_environment() -> None:
     except Exception as e:
         print(f"Environment has issues: {e}")
 
+def generate_random_pwl_path() -> None:
+    ax = None
+    for path in PWLPath.sample(d_tot=100, max_turn_deg=30, seg_len_range=(5, 20), start=(10, 30), initial_angle=-30, N=100):
+        ax = path.plot(ax=ax)
+
+    ax.set_aspect('equal')
+    plt.show() 
+
 if __name__=="__main__":
+    # generate_random_pwl_path()
     check_environment()

@@ -2,6 +2,9 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Any, Tuple, Dict, List
 from python_vehicle_simulator.lib.weather import Current
+from python_vehicle_simulator.visualizer.drawable import IDrawable
+from matplotlib.axes import Axes
+from python_vehicle_simulator.utils.math_fn import Rzyx
 
 """
 ^ surge (x)
@@ -11,8 +14,23 @@ O -----> sway (y)
 
 """
 
+THRUSTER_LENGTH = 0.2
+THRUSTER_WIDTH = 0.1
+THRUSTER_GEOMETRY = lambda L, W: np.array([
+    (L/2, W/2),
+    (-L/2, W/2),
+    (-L/2, -W/2),
+    (L/2, -W/2),
+    (L/2, W/2)
+])
 
-class IActuator(ABC):
+ROTATION_MATRIX = lambda a: np.array([
+    [np.cos(a), -np.sin(a)],
+    [np.sin(a), np.cos(a)]
+])
+
+
+class IActuator(IDrawable):
     def __init__(
             self,
             xy:Tuple,               # surge, sway in body frame
@@ -28,6 +46,7 @@ class IActuator(ABC):
             **kwargs
 
     ):
+        super().__init__(verbose_level=1)
         self.xy = np.array(xy)
         self.orientation = orientation
         self.u_0 = np.array(u_0) # initial command
@@ -76,10 +95,26 @@ class IActuator(ABC):
             Input:      u (np.ndarray) - For example propeller speed
             Output:     f (np.ndarray) - Generalized force (fx, fy, fz, Mx, My, Mz)
         """
-        return np.zeros((6,))   
+        return np.zeros((6,))  
+
+    def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
+        return ax
+
+    def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:
+        return ax
+
+    def __fill__(self, ax:Axes, *args, **kwargs) -> Axes:
+        return ax 
     
-    def reset(self):
-        self.u_actual_prev = self.u_0.copy()
+    def reset(self, random:bool=False, seed=None):
+        if random:
+            np.random.seed(seed=seed)
+            self.u_actual_prev = np.random.uniform(self.u_min, self.u_max)
+        else:
+            self.u_actual_prev = self.u_0.copy()
+        
+        # Enforce initial steady state 
+        self.u_prev = self.u_actual_prev.copy()
 
     @property
     def info(self) -> Dict:
@@ -106,14 +141,17 @@ class Thruster(IActuator):
         super().__init__(xy=xy, orientation=orientation, u_0=(n_0,), u_min=(n_min,), u_max=(n_max,), *args, time_const=(T_n,), f_min=(f_min,), f_max=(f_max,), **kwargs)
         self.k_pos = k_pos
         self.k_neg = k_neg
+        self.envelope = THRUSTER_GEOMETRY(THRUSTER_LENGTH, THRUSTER_WIDTH)
 
     def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
-        f = np.clip(self.k_pos * u[0]**2 if u[0]>=0 else -self.k_neg * u[0]**2, self.f_min, self.f_max)
-        return np.array([1, 0, 0, 0, 0, self.xy[1]]) * f
+        self.thrust = np.clip(self.k_pos * u[0]**2 if u[0]>=0 else -self.k_neg * u[0]**2, self.f_min, self.f_max)
+        return np.array([1, 0, 0, 0, 0, self.xy[1]]) * self.thrust
     
-    def Ti(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
-        
-        return
+    def __plot__(self, ax:Axes, eta:np.ndarray, *args, verbose:int=0, **kwargs) -> Axes:
+        envelope = (ROTATION_MATRIX(self.orientation) @ self.envelope.T) + self.xy[:, None]
+        envelope_in_ned_frame = Rzyx(*eta[3:6].tolist())[0:2, 0:2] @ envelope + eta[0:2, None]
+        ax.plot(envelope_in_ned_frame[1, :], envelope_in_ned_frame[0, :], *args, **kwargs)
+        return ax
 
 class AzimuthThruster(IActuator):
     def __init__(
@@ -141,6 +179,7 @@ class AzimuthThruster(IActuator):
         self.k_neg = k_neg
         self.efficiency = 1.0
         self.prev['info'].update({'efficiency': self.efficiency})
+        self.envelope = THRUSTER_GEOMETRY(THRUSTER_LENGTH, THRUSTER_WIDTH)
 
     def apply_faults(self) -> None:
         for fault in self.faults:
@@ -157,7 +196,8 @@ class AzimuthThruster(IActuator):
         u: azimuth, speed
         """
         self.apply_faults() # Apply fault if it must occur
-        f = self.efficiency * np.clip(self.k_pos * u[1]**2 if u[1]>=0 else -self.k_neg * u[1]**2, self.f_min, self.f_max)
+        self.thrust = self.efficiency * np.clip(self.k_pos * u[1]**2 if u[1]>=0 else -self.k_neg * u[1]**2, self.f_min, self.f_max)
+        
         return np.array([
                 np.cos(self.orientation + u[0]),
                 np.sin(self.orientation + u[0]),
@@ -165,8 +205,15 @@ class AzimuthThruster(IActuator):
                 0,
                 0,
                 self.xy[0] * np.sin(self.orientation + u[0]) - self.xy[1] * np.cos(self.orientation + u[0])
-            ]) * f
+            ]) * self.thrust
             
+
+    def __plot__(self, ax:Axes, eta:np.ndarray, *args, verbose:int=0, **kwargs) -> Axes:
+        envelope = (ROTATION_MATRIX(self.orientation + self.u_actual_prev[0]) @ self.envelope.T) + self.xy[:, None]
+        envelope_in_ned_frame = Rzyx(*eta[3:6].tolist())[0:2, 0:2] @ envelope + eta[0:2, None]
+        ax.plot(envelope_in_ned_frame[1, :], envelope_in_ned_frame[0, :], *args, **kwargs)
+        return ax
+
 
 class fin:
     '''
@@ -272,94 +319,100 @@ class fin:
 
 
 
-
-
-class thruster:
-    '''
-    Represents a thruster for hydrodynamic calculations.
-
-    INPUTS:
-        rho:    density of fluid (kg/m^3) 
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    th = Thruster((1, -0.5), 10, 10, 0, 10, orientation=0.3)
+    ax = th.plot(eta=np.array([10, 0, 0, 0, 0, -0.3]), verbose=1)
+    ax.set_aspect('equal')
+    plt.show()
     
-    Coordinate system: Right-handed, x-forward, y-starboard, z-down
-    '''
-    def __init__(self, rho):
-        # Actuator dynamics
-        self.nMax = 1525                # max propeller revolution (rpm)    
-        self.T_n = 0.1                  # propeller time constant (s)
-        self.u_actual_n = 0.0           # actual rpm of the thruster
-        self.rho = rho
 
-    def tau(self, nu_r, nu):
-        """
-        Calculate force vector generated by the fin.
+# class thruster:
+#     '''
+#     Represents a thruster for hydrodynamic calculations.
 
-        Parameters:
-            nu_r (numpy array): Relative velocity [vx, vy, vz, p, q, r] 
-                              (m/s for linear, rad/s for angular)
-            nu (numpy array): Velocity [vx, vy, vz, p, q, r] 
-                              (m/s for linear, rad/s for angular) 
+#     INPUTS:
+#         rho:    density of fluid (kg/m^3) 
+    
+#     Coordinate system: Right-handed, x-forward, y-starboard, z-down
+#     '''
+#     def __init__(self, rho):
+#         # Actuator dynamics
+#         self.nMax = 1525                # max propeller revolution (rpm)    
+#         self.T_n = 0.1                  # propeller time constant (s)
+#         self.u_actual_n = 0.0           # actual rpm of the thruster
+#         self.rho = rho
 
-        Returns:
-            numpy array: tau vector [Fx, Fy, Fz, Tx, Ty, Tz] (N) and (N*m) in body-fixed frame
-        """
-        U = np.sqrt(nu[0]**2 + nu[1]**2 + nu[2]**2)  # vehicle speed
+#     def tau(self, nu_r, nu):
+#         """
+#         Calculate force vector generated by the fin.
 
-        # Commands and actual control signals
-        n = self.u_actual_n            # actual propeller revolution (rpm)
+#         Parameters:
+#             nu_r (numpy array): Relative velocity [vx, vy, vz, p, q, r] 
+#                               (m/s for linear, rad/s for angular)
+#             nu (numpy array): Velocity [vx, vy, vz, p, q, r] 
+#                               (m/s for linear, rad/s for angular) 
+
+#         Returns:
+#             numpy array: tau vector [Fx, Fy, Fz, Tx, Ty, Tz] (N) and (N*m) in body-fixed frame
+#         """
+#         U = np.sqrt(nu[0]**2 + nu[1]**2 + nu[2]**2)  # vehicle speed
+
+#         # Commands and actual control signals
+#         n = self.u_actual_n            # actual propeller revolution (rpm)
         
-        # Amplitude saturation of the control signals
-        if abs(n) >= self.nMax:
-            n = np.sign(n) * self.nMax       
+#         # Amplitude saturation of the control signals
+#         if abs(n) >= self.nMax:
+#             n = np.sign(n) * self.nMax       
         
-        # Propeller coeffs. KT and KQ are computed as a function of advance no.
-        # Ja = Va/(n*D_prop) where Va = (1-w)*U = 0.944 * U; Allen et al. (2000)
-        D_prop = 0.14   # propeller diameter corresponding to 5.5 inches
-        t_prop = 0.1    # thrust deduction number
-        n_rps = n / 60  # propeller revolution (rps) 
-        Va = 0.944 * U  # advance speed (m/s)
+#         # Propeller coeffs. KT and KQ are computed as a function of advance no.
+#         # Ja = Va/(n*D_prop) where Va = (1-w)*U = 0.944 * U; Allen et al. (2000)
+#         D_prop = 0.14   # propeller diameter corresponding to 5.5 inches
+#         t_prop = 0.1    # thrust deduction number
+#         n_rps = n / 60  # propeller revolution (rps) 
+#         Va = 0.944 * U  # advance speed (m/s)
 
-        # Ja_max = 0.944 * 2.5 / (0.14 * 1525/60) = 0.6632
-        Ja_max = 0.6632
+#         # Ja_max = 0.944 * 2.5 / (0.14 * 1525/60) = 0.6632
+#         Ja_max = 0.6632
         
-        # Single-screw propeller with 3 blades and blade-area ratio = 0.718.
-        # Coffes. are computed using the Matlab MSS toolbox:     
-        # >> [KT_0, KQ_0] = wageningen(0,1,0.718,3)
-        KT_0 = 0.4566
-        KQ_0 = 0.0700
-        # >> [KT_max, KQ_max] = wageningen(0.6632,1,0.718,3) 
-        KT_max = 0.1798
-        KQ_max = 0.0312
+#         # Single-screw propeller with 3 blades and blade-area ratio = 0.718.
+#         # Coffes. are computed using the Matlab MSS toolbox:     
+#         # >> [KT_0, KQ_0] = wageningen(0,1,0.718,3)
+#         KT_0 = 0.4566
+#         KQ_0 = 0.0700
+#         # >> [KT_max, KQ_max] = wageningen(0.6632,1,0.718,3) 
+#         KT_max = 0.1798
+#         KQ_max = 0.0312
         
-        # Propeller thrust and propeller-induced roll moment
-        # Linear approximations for positive Ja values
-        # KT ~= KT_0 + (KT_max-KT_0)/Ja_max * Ja   
-        # KQ ~= KQ_0 + (KQ_max-KQ_0)/Ja_max * Ja  
+#         # Propeller thrust and propeller-induced roll moment
+#         # Linear approximations for positive Ja values
+#         # KT ~= KT_0 + (KT_max-KT_0)/Ja_max * Ja   
+#         # KQ ~= KQ_0 + (KQ_max-KQ_0)/Ja_max * Ja  
       
-        if n_rps > 0:   # forward thrust
+#         if n_rps > 0:   # forward thrust
 
-            X_prop = self.rho * pow(D_prop,4) * ( 
-                KT_0 * abs(n_rps) * n_rps + (KT_max-KT_0)/Ja_max * 
-                (Va/D_prop) * abs(n_rps) )        
-            K_prop = self.rho * pow(D_prop,5) * (
-                KQ_0 * abs(n_rps) * n_rps + (KQ_max-KQ_0)/Ja_max * 
-                (Va/D_prop) * abs(n_rps) )           
+#             X_prop = self.rho * pow(D_prop,4) * ( 
+#                 KT_0 * abs(n_rps) * n_rps + (KT_max-KT_0)/Ja_max * 
+#                 (Va/D_prop) * abs(n_rps) )        
+#             K_prop = self.rho * pow(D_prop,5) * (
+#                 KQ_0 * abs(n_rps) * n_rps + (KQ_max-KQ_0)/Ja_max * 
+#                 (Va/D_prop) * abs(n_rps) )           
             
-        else:    # reverse thrust (braking)
+#         else:    # reverse thrust (braking)
         
-            X_prop = self.rho * pow(D_prop,4) * KT_0 * abs(n_rps) * n_rps 
-            K_prop = self.rho * pow(D_prop,5) * KQ_0 * abs(n_rps) * n_rps 
+#             X_prop = self.rho * pow(D_prop,4) * KT_0 * abs(n_rps) * n_rps 
+#             K_prop = self.rho * pow(D_prop,5) * KQ_0 * abs(n_rps) * n_rps 
 
-        # Thrust force vector
-        # K_Prop scaled down by a factor of 10 to match exp. results
-        tau_thrust = np.array([(1-t_prop) * X_prop, 0, 0, K_prop / 10, 0, 0], float)
-        return tau_thrust
+#         # Thrust force vector
+#         # K_Prop scaled down by a factor of 10 to match exp. results
+#         tau_thrust = np.array([(1-t_prop) * X_prop, 0, 0, K_prop / 10, 0, 0], float)
+#         return tau_thrust
 
-    def actuate(self, sampleTime ,command):
-        # Actuator dynamics
-        n_dot = (command - self.u_actual_n) / self.T_n
+#     def actuate(self, sampleTime ,command):
+#         # Actuator dynamics
+#         n_dot = (command - self.u_actual_n) / self.T_n
 
-        self.u_actual_n += sampleTime * n_dot
+#         self.u_actual_n += sampleTime * n_dot
         
-        return self.u_actual_n
+#         return self.u_actual_n
         

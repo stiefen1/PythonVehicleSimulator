@@ -24,7 +24,7 @@ from python_vehicle_simulator.lib.control import IControl
 from python_vehicle_simulator.lib.navigation import INavigation
 from python_vehicle_simulator.lib.actuator import IActuator
 from python_vehicle_simulator.lib.diagnosis import IDiagnosis, Diagnosis
-import casadi as ca, math
+import casadi as ca, math, sympy as sp
 
 INF = float('inf')
 
@@ -50,7 +50,7 @@ class RevoltBowThrusterParams: # front
     ## Propellers       
     T_n: float = 0.3                                            # Propeller time constant (s)
     T_a: float = 3.0                                            # Azimuth angle time constant (s) -> Chosen by me
-    k_pos: float = 2.7e-3 # 1.518e-3                                     # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
+    k_pos: float = 1.518e-3                                     # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
     k_neg: float = 6.172e-4                                     # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
     f_max: float = 14                                           # Max positive force, one propeller
     f_min: float = 0 # -6.1                                         # Max negative force, one propeller
@@ -119,6 +119,7 @@ class RevoltThrusterParameters:
             lx*ca.sin(alpha) - ly * ca.cos(alpha)
         ])
 
+        ####### WARNING : IF YOU CHANGE T YOU HAVE TO DO IT AS WELL IN RL ENVIRONMENTS, IT IS NOT LINKED ######
         self.T = lambda a1, a2, a3 : ca.vertcat(
             ca.horzcat(ca.cos(a1), ca.sin(a1), self.xy[0, 0]*ca.sin(a1) - self.xy[0, 1] * ca.cos(a1)),
             ca.horzcat(ca.cos(a2), ca.sin(a2), self.xy[1, 0]*ca.sin(a2) - self.xy[1, 1] * ca.cos(a2)),
@@ -206,6 +207,7 @@ class RevoltParameters3DOF:
         #     self.C(x[3:6]) @ x[3:6] +
         #     self.D @ x[3:6]
         # )
+
 
 
 # Class Vehicle
