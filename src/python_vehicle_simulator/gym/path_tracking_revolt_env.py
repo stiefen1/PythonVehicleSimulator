@@ -61,16 +61,16 @@ class GymPathTrackingReVoltEnv(gym.Env):
         self.huber_penalty_weight = 30 # q_x,y
         self.heading_penalty_weight = 50 # q_psi
         self.singular_value_penalty = 1e-3 # epsilon -> for nonsigular thruster configuration
-        self.singular_value_weight = 1e-5 # rho -> for nonsigular thruster configuration
+        self.singular_value_weight = 1e-5 # 1e-5 # rho -> for nonsigular thruster configuration
 
         self.Q = np.array([
-            [10, 0, 0],
+            [1, 0, 0],
             [0, 10, 0],
             [0, 0, 10]
         ]) # Velocity weight matrix
 
         self.Ra = np.eye(3) * 1e-2 # Azimuth weight matrix
-        self.Rf = np.eye(3) * 0 # 1e-3 # 1e-1 # Force weight matrix
+        self.Rf = np.eye(3) * 1e-1 # Force weight matrix
 
     def cost_tracking(self, p:np.ndarray, p_d:np.ndarray) -> float:
         return float(self.huber_penalty_slope**2 * (np.sqrt(1 + ((p[0:2]-p_d[0:2]).T @ (p[0:2]-p_d[0:2])) / self.huber_penalty_slope**2) - 1))
@@ -200,7 +200,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
         nu_d = np.array([self.desired_speed, 0, 0])
         force = np.array([actuator.thrust for actuator in self.own_vessel.actuators])
         alpha = np.array([actuator.u_actual_prev[0] for actuator in self.own_vessel.actuators])
-        return -self.cost(eta, nu, eta_d, nu_d, force, alpha) #float(np.exp(-self.cost(eta, nu, eta_d, nu_d, force, alpha)/10))
+        return float(np.exp(-self.cost(eta, nu, eta_d, nu_d, force, alpha)/10)) # -self.cost(eta, nu, eta_d, nu_d, force, alpha) 
 
     def dist_to_target(self) -> float:
         ne = np.array(self.own_vessel.eta.neyaw[0:2])
