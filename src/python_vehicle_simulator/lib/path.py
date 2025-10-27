@@ -1,5 +1,5 @@
 from python_vehicle_simulator.visualizer.drawable import IDrawable
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Literal
 from matplotlib.axes import Axes
 import numpy as np, math, shapely
 
@@ -13,9 +13,16 @@ class PWLPath(IDrawable):
             waypoints:List[Tuple],
             *args,
             verbose_level=0,
+            input_format:Literal['north-east', 'east-north']='north-east',
             **kwargs
     ):
         super().__init__(*args, verbose_level=verbose_level, **kwargs)
+        if input_format == 'east-north':
+            old_wpts = waypoints
+            waypoints = []
+            for wpt in old_wpts:
+                waypoints.append((wpt[1], wpt[0]))
+
         self.waypoints = np.array(waypoints)
         self.length = shapely.LineString(self.waypoints).length
         self.init_heading()
