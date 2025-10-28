@@ -172,6 +172,8 @@ class AzimuthThruster(IActuator):
             f_min:float=-float('inf'),
             orientation:float=0.0,
             faults:List[Dict]=None,
+            length:float=THRUSTER_LENGTH,
+            width:float=THRUSTER_WIDTH,
             **kwargs
     ):
         super().__init__(xy=xy, orientation=orientation, u_0=(alpha_0, n_0), u_min=(a_min, n_min), u_max=(a_max, n_max), *args, time_const=(T_a, T_n), f_min=(f_min,), f_max=(f_max,), faults=faults, **kwargs)
@@ -179,7 +181,7 @@ class AzimuthThruster(IActuator):
         self.k_neg = k_neg
         self.efficiency = 1.0
         self.prev['info'].update({'efficiency': self.efficiency})
-        self.envelope = THRUSTER_GEOMETRY(THRUSTER_LENGTH, THRUSTER_WIDTH)
+        self.envelope = THRUSTER_GEOMETRY(length, width)
 
     def apply_faults(self) -> None:
         for fault in self.faults:
