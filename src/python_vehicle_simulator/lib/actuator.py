@@ -74,6 +74,7 @@ class IActuator(IDrawable):
         """
             Wrapper for __dynamics__. Add saturation to actuator input commands
         """
+        # print("actual control commands received in actuator: ", u)
         self.u_prev = u.copy()
         u_dot = (u-self.u_actual_prev) / self.time_const
         u = np.clip(self.u_actual_prev + u_dot * dt, self.u_min, self.u_max) # clip input within min/max bounds
@@ -141,10 +142,22 @@ class Thruster(IActuator):
         super().__init__(xy=xy, orientation=orientation, u_0=(n_0,), u_min=(n_min,), u_max=(n_max,), *args, time_const=(T_n,), f_min=(f_min,), f_max=(f_max,), **kwargs)
         self.k_pos = k_pos
         self.k_neg = k_neg
+        self.efficiency = 1.0
         self.envelope = THRUSTER_GEOMETRY(THRUSTER_LENGTH, THRUSTER_WIDTH)
 
+    def apply_faults(self) -> None:
+        for fault in self.faults:
+            match fault['type']:
+                case 'loss-of-efficiency':
+                    if self.t >= fault['t0']:
+                        self.efficiency = fault['efficiency']
+                case _:
+                    print("Fault type is invalid")
+        self.prev['info']['efficiency'] = self.efficiency
+
     def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
-        self.thrust = np.clip(self.k_pos * u[0]**2 if u[0]>=0 else -self.k_neg * u[0]**2, self.f_min, self.f_max)
+        self.apply_faults()
+        self.thrust = self.efficiency * np.clip(self.k_pos * u[0]**2 if u[0]>=0 else -self.k_neg * u[0]**2, self.f_min, self.f_max)
         return np.array([1, 0, 0, 0, 0, self.xy[1]]) * self.thrust
     
     def __plot__(self, ax:Axes, eta:np.ndarray, *args, verbose:int=0, **kwargs) -> Axes:
