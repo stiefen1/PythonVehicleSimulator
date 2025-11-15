@@ -131,11 +131,11 @@ class DiagnosisOfRevolt3Actuators(IDiagnosis):
         n1, n2, n3 = sp.symbols('n1 n2 n3')
         a1, a2, a3 = sp.symbols('a1 a2 a3')
         d1, d2, d3 = sp.symbols('d1, d2, d3', real=True, finite=True)
-        n_hat, e_hat, psi_hat, u_hat, v_hat, r_hat = sp.symbols('n_hat e_hat psi_hat u_hat v_hat r_hat')
+        # n_hat, e_hat, psi_hat, u_hat, v_hat, r_hat = sp.symbols('n_hat e_hat psi_hat u_hat v_hat r_hat')
         delta = sp.Matrix([d1, d2, d3])
         eta = sp.Matrix([n, e, psi])
         nu = sp.Matrix([u, v, r])
-        x_hat = sp.Matrix([n_hat, e_hat, psi_hat, u_hat, v_hat, r_hat])
+        # x_hat = sp.Matrix([n_hat, e_hat, psi_hat, u_hat, v_hat, r_hat])
         # x = sp.Matrix([n, e, psi, u, v, r])  # Full state vector
 
 
@@ -386,7 +386,7 @@ class AugmentedEKFDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators, IExtend
             *args,
             Q:np.ndarray = np.eye(9), # Process noise -> Small means we trust our model A LOT                               # When using 1e-5 for Both Q and R results are okay
             R:np.ndarray = R_REVOLT, # Measurement noise -> Small means we trust our measurements A LOT
-            P0:np.ndarray = np.eye(9)*1e-5,
+            P0:np.ndarray = np.eye(9)*1e-6,
             efficiency_0:np.ndarray=np.array([1, 1, 1]),
             **kwargs
     ) -> None:

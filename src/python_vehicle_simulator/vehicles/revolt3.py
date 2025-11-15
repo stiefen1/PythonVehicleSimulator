@@ -84,6 +84,8 @@ class RevoltThrusterParameters:
     ## Propellers       
     # T_n: float = 0.3                                            # Propeller time constant (s)
     # T_a: float = 3.0 
+    use_time_constant: bool = True
+    dt: float = None
     thrusters: List = field(init=False)                         # Azimuth angle time constant (s) -> Chosen by me
     k_pos: np.ndarray = field(init=False)                       # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
     k_neg: np.ndarray = field(init=False)                       # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
@@ -99,7 +101,11 @@ class RevoltThrusterParameters:
     time_constant: np.ndarray = field(init=False)
 
     def __post_init__(self):
-        self.thrusters = [RevoltSternThrusterParams(), RevoltSternThrusterParams(), RevoltBowThrusterParams()]  
+        if self.use_time_constant:
+            self.thrusters = [RevoltSternThrusterParams(), RevoltSternThrusterParams(), RevoltBowThrusterParams()]  
+        elif self.dt is not None:
+            self.thrusters = [RevoltSternThrusterParams(T_n=self.dt, T_a=self.dt), RevoltSternThrusterParams(T_n=self.dt, T_a=self.dt), RevoltBowThrusterParams(T_n=self.dt, T_a=self.dt)]  
+
         self.k_pos: np.ndarray = np.array([thruster.k_pos for thruster in self.thrusters])    # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
         self.k_neg: np.ndarray = np.array([thruster.k_neg for thruster in self.thrusters])     # Negative Bollard, one propeller
         self.f_max: np.ndarray = np.array([thruster.f_max for thruster in self.thrusters])                  # Max positive force, one propeller

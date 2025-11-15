@@ -59,16 +59,16 @@ from python_vehicle_simulator.lib.actuator import IActuator
 class OtterThrusterParameters:
     ## Propellers       
     T_n: float = 0.1                    # Propeller time constant (s)
-    k_pos: float = 0.02216 / 2          # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
-    k_neg: float = 0.01289 / 2          # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
-    f_max: float = 24.4 * GRAVITY / 2         # Max positive force, one propeller
-    f_min: float = -13.6 * GRAVITY / 2        # Max negative force, one propeller
+    k_neg: float = 0.01289 / 2 / 2       # Negative Bollard, one propeller (Division by two because there are two propellers, values are obtained with a Bollard pull)
+    k_pos: float = 0.02216 / 2 / 2 # 0.02216 / 2          # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
+    f_max: float = 24.4 * GRAVITY / 2 / 1        # Max positive force, one propeller
+    f_min: float = -13.6 * GRAVITY / 2 / 1       # Max negative force, one propeller
     n_max: float = field(init=False)    # Max (positive) propeller speed
     n_min: float = field(init=False)    # Min (negative) propeller speed
     n_dot_max: float = field(init=False)
 
     def __post_init__(self):
-        self.n_max = math.sqrt(self.f_max / self.k_pos)
+        self.n_max = math.sqrt(self.f_max / self.k_pos) 
         self.n_min = -math.sqrt(-self.f_min / self.k_neg)
 
 
@@ -290,12 +290,211 @@ class Otter(IVessel):
             + g_0
         )
 
+        # print("actuators: ", tau_actuators)
+        # print("nu: ", nu)
+        # print("damping: ", tau_damp)
+        # print("crossflow: ", tau_crossflow)
+        # print("C@nu_r: ", np.matmul(C, nu_r))
+        # print("Gmtrx @ eta: ", np.matmul(self.params.Gmtrx, eta))
+        # print("g_0: ", g_0)
+
         # USV dynamics
         nu_dot = Dnu_c + np.matmul(self.params.Minv, sum_tau)
 
         return nu_dot
 
 
+@dataclass
+class OtterParameters3DOF:
+    """3DOF Otter parameters - only horizontal plane motion (surge, sway, yaw)"""
+    loa: float = 2.0                                    # Length Over All (m)
+    beam: float = 1.08                                  # Beam (m)
+    R66: float = 0.4 * beam                             # Radius of gyration in yaw (m)
+    
+    # Mass and inertia (3DOF: [m, m, Izz])
+    m: float = 55.0                                     # Mass (kg)
+    Izz: float = m * R66**2                             # Yaw moment of inertia (kg*m^2)
+    
+    # Added mass matrix (3DOF) - directly from 6DOF model for consistency
+    X_du: float = 5.5                                # Surge added mass: 0.1 * m
+    Y_dv: float = 82.5                               # Sway added mass: 1.5 * m  
+    N_dr: float = 24.6                               # Yaw added mass: 1.7 * Izz (approx)
+    
+    # Damping coefficients (3DOF) - CORRECTED for realistic dynamics
+    X_u: float = 2.75                                  # Linear surge damping (was -0.4)
+    Y_v: float = 5.50                                  # Linear sway damping (was -0.8)
+    N_r: float = 4.69                                  # Linear yaw damping (was -1.0)
+    
+    # Cross-flow drag parameters
+    B_pont: float = 0.25                                # Pontoon beam (m)
+    draft: float = 0.075                                # Draft (m)
+    
+    def __post_init__(self):
+        # Mass matrix (3x3)
+        self.M = np.array([
+            [self.m + self.X_du, 0, 0],
+            [0, self.m + self.Y_dv, 0],
+            [0, 0, self.Izz + self.N_dr]
+        ])
+        
+        self.CA = lambda ur, vr, r : np.array([
+            [0, 0, self.Y_dv * vr],
+            [0, 0, -self.X_du * ur],
+            [-self.Y_dv * vr, self.X_du * ur, 0]])
+
+        self.CRB = lambda u, v, r : np.array([
+            [0,           0,         -self.m * v],
+            [0,           0,          self.m * u],
+            [self.m * v,    -self.m * u,    0      ]
+        ])
+
+        # Damping matrix (3x3) - linear terms only
+        self.D =  np.array([
+            [self.m / self.X_u, 0, 0],
+            [0, self.m / self.Y_v, 0],
+            [0, 0, self.Izz / self.N_r]
+        ])
+
+        # self.DNL = lambda u, v, r : np.array([
+        #     [self.ku * self.forward_speed, 0, 0],
+        #     [0, self.kv * self.sideways_speed, 0],
+        #     [0, 0, self.kr * self.yaw_rate]
+        # ])
+        
+        # Inverse mass matrix
+        self.Minv = np.linalg.inv(self.M)
+
+
+class Otter3DOF(IVessel):
+    """3DOF Otter USV model - horizontal plane motion only"""
+    
+    def __init__(self, params: OtterParameters3DOF, dt: float, actuators: List = None, nu: Tuple[float, float, float] = (0, 0, 0), eta: Tuple[float, float, float] = (0, 0, 0), **kwargs):
+        """
+        Initialize 3DOF Otter USV
+        
+        Args:
+            params: Otter3DOF parameters
+            dt: Sample time (s)
+            actuators: List of actuators (thrusters)
+            nu: Initial velocity [u, v, r] (m/s, m/s, rad/s)
+            eta: Initial position [x, y, psi] (m, m, rad)
+        """
+        # Convert 3DOF states to 6DOF for base class compatibility
+        eta_6dof = (eta[0], eta[1], 0.0, 0.0, 0.0, eta[2])  # [N, E, D, roll, pitch, yaw]
+        nu_6dof = (nu[0], nu[1], 0.0, 0.0, 0.0, nu[2])      # [u, v, w, p, q, r]
+        
+        super().__init__(params, dt, actuators=actuators, eta=eta_6dof, nu=nu_6dof, **kwargs)
+        self.params = params
+        
+    def get_eta_3dof(self) -> np.ndarray:
+        """Get 3DOF position/orientation [x, y, psi]"""
+        return np.array([self.eta.n, self.eta.e, self.eta.yaw])
+        
+    def get_nu_3dof(self) -> np.ndarray:
+        """Get 3DOF velocity [u, v, r]"""
+        return np.array([self.nu.u, self.nu.v, self.nu.r])
+    
+    def get_thruster_actual_speeds(self) -> np.ndarray:
+        u_actual = []
+        for actuator in self.actuators:
+            u_actual.append(actuator.u_actual_prev[0])
+        return np.array(u_actual)
+        
+    def set_eta_3dof(self, eta_3dof: np.ndarray):
+        """Set 3DOF position/orientation [x, y, psi]"""
+        self.eta.n = eta_3dof[0]
+        self.eta.e = eta_3dof[1]
+        self.eta.yaw = eta_3dof[2]
+        # Keep other DOF at zero
+        self.eta.d = 0.0
+        self.eta.roll = 0.0
+        self.eta.pitch = 0.0
+        
+    def set_nu_3dof(self, nu_3dof: np.ndarray):
+        """Set 3DOF velocity [u, v, r]"""
+        self.nu.u = nu_3dof[0] 
+        self.nu.v = nu_3dof[1]
+        self.nu.r = nu_3dof[2]
+        # Keep other DOF at zero
+        self.nu.w = 0.0
+        self.nu.p = 0.0
+        self.nu.q = 0.0
+        
+    def __dynamics__(self, tau_actuators: np.ndarray, current: Current, wind: Wind, *args, **kwargs) -> np.ndarray:
+        """
+        Required implementation of abstract method from IVessel base class.
+        3DOF USV dynamics: M * nu_dot + C(nu) * nu + D * nu = tau
+        """
+        # Get current 3DOF states
+        nu_3dof = self.get_nu_3dof()
+        
+        # Extract 3DOF forces from 6DOF actuator input
+        tau_3dof = np.array([tau_actuators[0], tau_actuators[1], tau_actuators[5]])  # [X, Y, N]
+        
+        # 3DOF dynamics computation
+        u, v, r = nu_3dof
+        
+        # Coriolis-centripetal matrix (3DOF)        
+        CRB = self.params.CRB(u, v, r)
+        CA = self.params.CA(u, v, r)
+        C = CA + CRB
+
+
+        
+        # Cross-flow drag (simplified for 3DOF)
+        # tau_crossflow = self._crossflow_drag_3dof(nu_3dof)
+        
+        # Quadratic damping (simplified)
+        # tau_quad_damp = np.array([
+        #     -0.1 * abs(u) * u,  # Surge quadratic damping
+        #     -0.2 * abs(v) * v,  # Sway quadratic damping  
+        #     -0.1 * abs(r) * r   # Yaw quadratic damping
+        # ])
+        
+        # Total forces and moments
+        tau_coriolis = - C @ nu_3dof
+        tau_damping = - self.params.D @ nu_3dof
+        tau_total = tau_3dof + tau_coriolis + tau_damping
+        # print(tau_3dof, tau_coriolis, tau_damping * np.array([u, v, r]))
+        
+        # Acceleration
+        nu_dot_3dof = self.params.Minv @ tau_total
+        
+        # Convert back to 6DOF for base class compatibility
+        nu_dot_6dof = np.zeros(6)
+        nu_dot_6dof[0] = nu_dot_3dof[0]  # u_dot
+        nu_dot_6dof[1] = nu_dot_3dof[1]  # v_dot  
+        nu_dot_6dof[5] = nu_dot_3dof[2]  # r_dot
+        
+        return nu_dot_6dof
+        
+    # def _crossflow_drag_3dof(self, nu: np.ndarray) -> np.ndarray:
+    #     """Simplified cross-flow drag for 3DOF model"""
+    #     v = nu[1]  # Sway velocity
+    #     r = nu[2]  # Yaw rate
+        
+    #     # Simplified cross-flow - only significant for large sway velocities
+    #     rho = RHO
+    #     L = self.params.loa
+    #     T = self.params.draft
+    #     Cd_2D = 1.2  # Simplified drag coefficient
+        
+    #     # Cross-flow force and moment (very simplified)
+    #     Y_crossflow = -0.5 * rho * T * Cd_2D * abs(v) * v
+    #     N_crossflow = -0.5 * rho * T * Cd_2D * (L/4) * abs(v) * v  # Simplified moment arm
+        
+    #     return np.array([0, Y_crossflow, N_crossflow])
+
+
 if __name__ == "__main__":
-    data = OtterParameters()
-    print(data)
+    # Test both classes
+    print("6DOF Otter Parameters:")
+    data_6dof = OtterParameters()
+    print(data_6dof)
+    
+    print("\n3DOF Otter Parameters:")
+    data_3dof = OtterParameters3DOF()
+    print(data_3dof)
+    
+    print(f"\n3DOF Mass matrix:\n{data_3dof.M}")
+    print(f"3DOF Damping matrix:\n{data_3dof.D}")

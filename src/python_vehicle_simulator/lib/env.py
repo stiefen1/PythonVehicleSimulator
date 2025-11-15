@@ -1,9 +1,10 @@
 from python_vehicle_simulator.lib.weather import Wind, Current
 from python_vehicle_simulator.vehicles.vessel import IVessel
 from python_vehicle_simulator.lib.obstacle import Obstacle
-from typing import List, Tuple, Dict, Any, Literal
+from typing import List, Tuple, Dict, Any, Optional
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 
 class NavEnv:
@@ -50,7 +51,7 @@ class NavEnv:
         self.infos:List[Dict] = []
         self.dones:List[bool] = []
         self.t = 0
-        self.fig = None
+        self.fig: Optional[Figure] = None
         self.ax = None
         self.vessel_plot = None
 

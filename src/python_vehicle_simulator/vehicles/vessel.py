@@ -63,7 +63,7 @@ class IVessel(IDrawable):
         self.navigation = navigation or Navigation(self.eta.to_numpy(), self.nu.to_numpy())
         self.control = control or Control()
         self.diagnosis = diagnosis or Diagnosis(eta=self.eta.to_numpy(), nu=self.nu.to_numpy(), params=None, dt=self.dt)
-        self.actuators = actuators or []
+        self.actuators: List[IActuator] = actuators or []
         self.initial_geometry = VESSEL_GEOMETRY(self.params.loa, self.params.beam)
         self.name = name
         self.mmsi = mmsi
@@ -108,7 +108,10 @@ class IVessel(IDrawable):
             # print(f"tau {i}: {tau_i}")
 
         # USV Dynamics
+        # print(f"tau actuators: {tau_actuators}")
+        # print("current/wind: ", current.norm, current.beta, wind.norm, wind.beta)
         nu_dot = self.__dynamics__(tau_actuators, current, wind, *args, **kwargs)
+        # print(nu_dot)
 
         # Forward Euler integration of nu
         nu = Euler(self.nu.to_numpy(), nu_dot, self.dt)

@@ -31,12 +31,10 @@ def Smtrx(a):
     S = Smtrx(a) computes the 3x3 vector skew-symmetric matrix S(a) = -S(a)'.
     The cross product satisfies: a x b = S(a)b. 
     """
- 
     S = np.array([ 
         [ 0, -a[2], a[1] ],
         [ a[2],   0,     -a[0] ],
         [-a[1],   a[0],   0 ]  ])
-
     return S
 
 
@@ -72,6 +70,26 @@ def Rzyx(phi,theta,psi):
     sth  = sin(theta)
     cpsi = cos(psi)
     spsi = sin(psi)
+    
+    R = np.array([
+        [ cpsi*cth, -spsi*cphi+cpsi*sth*sphi, spsi*sphi+cpsi*cphi*sth ],
+        [ spsi*cth,  cpsi*cphi+sphi*sth*spsi, -cpsi*sphi+sth*spsi*cphi ],
+        [ -sth,      cth*sphi,                 cth*cphi ] ])
+
+    return R
+
+def Rzyx_casadi(phi,theta,psi):
+    """
+    R = Rzyx(phi,theta,psi) computes the Euler angle rotation matrix R in SO(3)
+    using the zyx convention
+    """
+    
+    cphi = ca.cos(phi)
+    sphi = ca.sin(phi)
+    cth  = ca.cos(theta)
+    sth  = ca.sin(theta)
+    cpsi = ca.cos(psi)
+    spsi = ca.sin(psi)
     
     R = np.array([
         [ cpsi*cth, -spsi*cphi+cpsi*sth*sphi, spsi*sphi+cpsi*cphi*sth ],

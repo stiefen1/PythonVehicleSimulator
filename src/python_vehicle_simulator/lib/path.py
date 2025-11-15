@@ -78,8 +78,7 @@ class PWLPath(IDrawable):
 
     def get_target_wpts_from(self, north:float, east:float, dp:float, N:int, final_heading:float=0.0) -> List[Tuple[float, float, float]]:
         """
-        Returns a set of N waypoints (north, east) along the path, separated by a distance dp
-        if heading is True, a third dimension is added with desired heading values.
+        Returns a set of N waypoints (north, east, heading) along the path, separated by a distance dp
 
         Projection of the current position is included to simplify MPC implementation.
 

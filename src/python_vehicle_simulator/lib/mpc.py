@@ -105,9 +105,10 @@ class MPCPathTrackingRevolt(IControl):
         # Hyperparameters
         self.huber_penalty_slope = 10 # delta
         self.huber_penalty_weight = 30 # q_x,y
-        self.heading_penalty_weight = 50 # 50 # q_psi
+        self.heading_penalty_weight = 100 # 50 # q_psi
         self.singular_value_penalty = 1e-3 # epsilon -> for nonsigular thruster configuration
-        self.singular_value_weight = 8e-4 # 1e-9 #  5e-4 # 1e-5 # rho -> for nonsigular thruster configuration
+        self.singular_value_weight = 8e-4 # 1e-9 #s  5e-4 # 1e-5 # rho -> for nonsigular thruster configuration
+        self.detectability_weight = -5e1 # -1e2  # -1e1 is almost useless # -5e1 is very useful # -1e3 is an extreme case to #e-1 -> MAKE THIS ADAPTIVE W.R.T TRACKING COST -> position, heading and speed
 
         self.Q = np.array([
             [1, 0, 0],
@@ -118,7 +119,7 @@ class MPCPathTrackingRevolt(IControl):
         self.Ra = np.eye(3) * 1e-2 # Azimuth weight matrix
         self.Rf = np.eye(3) * 1e-5 # 1e-1 # Force weight matrix
 
-        self.Theta_v = np.diag([1, 1, 1, 1, 1, 10])*0 # Terminal weight matrix
+        self.Theta_v = np.diag([0, 0, 10, 0, 0, 0])*1 # Terminal weight matrix
 
         self.gamma = gamma
         
@@ -172,7 +173,16 @@ class MPCPathTrackingRevolt(IControl):
         
         Reinforcement learning-based NMPC for tracking control of ASVs:Theory and experiments (https://www.sciencedirect.com/science/article/pii/S0967066121002823)
         """
-        return (self.gamma**k)*(self.huber_penalty_weight * self.huber_cost(xk, pk_des) + self.heading_penalty_weight * self.heading_cost(xk, pk_des) + self.singular_value_weight * self.singularity_cost(uk) + self.speed_cost(xk, nu_des) + self.alpha_cost(uk) + self.force_cost(uk))
+        cost = self.huber_penalty_weight * self.huber_cost(xk, pk_des)
+        cost += self.heading_penalty_weight * self.heading_cost(xk, pk_des)
+        cost += self.speed_cost(xk, nu_des)
+        cost += self.alpha_cost(uk)
+        cost += self.force_cost(uk)
+        cost += self.speed_cost(xk, nu_des)
+        cost += self.alpha_cost(uk)
+        # cost += self.singular_value_weight * self.singularity_cost(uk) 
+        cost -= self.detectability_weight * self.detectability_cost(uk)
+        return (self.gamma**k)*cost
         # return ca.mtimes(ca.transpose(xk[0:3]-np.array(pk_des)), xk[0:3]-np.array(pk_des))
 
     def __mayer__(self, xf:ca.SX, pf_des:Tuple[float, float, float], nu_des:np.ndarray, *args, sf:ca.SX=None, **kwargs) -> ca.SX:
@@ -191,6 +201,22 @@ class MPCPathTrackingRevolt(IControl):
     def singularity_cost(self, uk:Any) -> Any:
         T = self.actuator_params.T(uk[3], uk[4], uk[5])
         return 1 / (self.singular_value_penalty + ca.det(T @ T.T))
+    
+    def detectability_cost(self, uk:Any, efficiency:np.ndarray=None) -> Any:
+        T = self.actuator_params.T(uk[3], uk[4], uk[5])
+        Delta = ca.diag(self.efficiency) if efficiency is None else efficiency
+        Delta0 = np.diag([1, 1, 1])
+        Delta1 = np.diag([1, 1, 0])
+        Delta2 = np.diag([0, 1, 1])
+        Delta3 = np.diag([1, 0, 1])
+        Deltas = [Delta0, Delta1, Delta2, Delta3]
+        K_sqrt = self.vessel_params.Minv @ T
+        K = K_sqrt.T @ K_sqrt
+        P = np.zeros((3, 3))
+        for Delta_i in Deltas:
+            P += (Delta_i - Delta).T @ K @ (Delta_i - Delta)
+        return -(uk[0:3].T @ P @ uk[0:3]) / len(Deltas) # We want to maximize so add a negative sign
+
 
     def speed_cost(self, xk:Any, nu_des:np.ndarray) -> Any:
         return (xk[3:6]-nu_des).T @ self.Q @ (xk[3:6]-nu_des)
@@ -201,7 +227,7 @@ class MPCPathTrackingRevolt(IControl):
     def force_cost(self, uk:Any) -> Any:
         return uk[0:3].T @ self.Rf @ uk[0:3]
     
-    def eval_current_state(self, p0_des:np.ndarray, nu_des:np.ndarray) -> Dict:
+    def eval_current_state(self, p0_des:np.ndarray, nu_des:np.ndarray, efficiency:np.ndarray=None) -> Dict:
         x0, u0 = self.get_x_opt(0), self.get_u_actual_opt(0)
         return {
             'huber': self.huber_penalty_weight*self.huber_cost(x0, p0_des),
@@ -209,15 +235,16 @@ class MPCPathTrackingRevolt(IControl):
             'singularity': self.singular_value_weight*self.singularity_cost(u0),
             'speed': self.speed_cost(x0, nu_des),
             'alpha': self.alpha_cost(u0),
-            'force': self.force_cost(u0)
+            'force': self.force_cost(u0),
+            'detectability': -self.detectability_weight*self.detectability_cost(u0, efficiency=efficiency)
         }
 
-    def eval_solution(self, nu_des:np.ndarray, path:List[Tuple[float, float, float]]) -> Dict:
+    def eval_solution(self, nu_des:np.ndarray, path:List[Tuple[float, float, float]], efficiency:np.ndarray=None) -> Dict:
         """
         Evaluate the current solution by computing the total cost of each term
         """
 
-        huber, heading, singularity, speed, alpha, force = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        huber, heading, singularity, speed, alpha, force, detectability = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         for k in range(self.horizon):
             # print('\n################## k: ', k)
             uk = self.get_u_actual_opt(k)
@@ -243,13 +270,16 @@ class MPCPathTrackingRevolt(IControl):
             force += (self.gamma**k)*self.force_cost(uk)
             # print('force: ', force)
 
+            detectability -= (self.gamma**k)*self.detectability_cost(uk, efficiency=efficiency)
+
         cost = {
             'huber': self.huber_penalty_weight*huber,
             'heading': self.heading_penalty_weight*heading,
             'singularity': self.singular_value_weight*singularity,
             'speed': speed,
             'alpha': alpha,
-            'force': force
+            'force': force,
+            'detectability': self.detectability_weight*detectability
         }
 
         return cost       
@@ -390,8 +420,8 @@ class MPCPathTrackingRevolt(IControl):
         # print("u_prev_actual:", u_prev_actual)
         self.set_initial_constraints(x0, u_prev_actual, efficiency=delta, *args, **kwargs)
         self.solve(initial_guess, *args, **kwargs) # Solve for X, U, V
-        cost = self.eval_solution(nu_des, path)
-        current_cost = self.eval_current_state(path[0], nu_des)
+        cost = self.eval_solution(nu_des, path, efficiency=delta)
+        current_cost = self.eval_current_state(path[0], nu_des, efficiency=delta)
         info = {'horizon': self.horizon, 'psi_des': path[0][2], 'cost': cost, 'current_cost': current_cost, 'prediction': self.XOpt}
         return self.__format_commands__(self.u_prev_setpoint, *args, **kwargs), info
     

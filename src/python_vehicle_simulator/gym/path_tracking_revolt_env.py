@@ -20,7 +20,11 @@ class GymPathTrackingReVoltEnv(gym.Env):
             render_mode:Literal['human', 'human3d']=None,
             path_params:Dict={'d_tot':50, 'max_turn_deg':30, 'seg_len_range': (5, 10), 'start': (0, 0), 'initial_angle':0},
             desired_speed_range:Tuple=(0.2, 0.7),
-            horizon:int=20
+            heading_max_error:Tuple=np.pi/3,
+            horizon:int=20,
+            controller_type:Literal["acados", None] = None,
+            max_steps:int=200,
+            dp:float=None # distance between desired waypoints 
     ):
         self.own_vessel = own_vessel
         self.target_vessels = target_vessels
@@ -29,7 +33,10 @@ class GymPathTrackingReVoltEnv(gym.Env):
         self.current = current
         self.path_params = path_params
         self.desired_speed_range = desired_speed_range
+        self.heading_max_error = heading_max_error
         self.horizon = horizon
+        self.controller_type = controller_type
+        self.dp = dp
 
         self.init_action_space()
         self.init_observation_space()
@@ -46,7 +53,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
 
         # Current step (for plot purpose)
         self._step = 0
-        self.max_steps = 200 # i.e. 100 seconds for dt=0.02 and action_repeat=10
+        self.max_steps = max_steps # i.e. 100 seconds for dt=0.02 and action_repeat=10
 
         # observation space
         self.ne_range = {"min": np.array(2*[-self.path_params['d_tot']]), "max": np.array(2*[self.path_params['d_tot']])}
@@ -59,7 +66,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
         # Reward function
         self.huber_penalty_slope = 10 # delta
         self.huber_penalty_weight = 30 # q_x,y
-        self.heading_penalty_weight = 50 # q_psi
+        self.heading_penalty_weight = 100 # q_psi
         self.singular_value_penalty = 1e-3 # epsilon -> for nonsigular thruster configuration
         self.singular_value_weight = 1e-5 # rho -> for nonsigular thruster configuration
 
@@ -116,7 +123,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
         cost += self.cost_force(force)
         return float(cost[0, 0])
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[Dict, Dict]:
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None, random: Optional[bool] = True) -> Tuple[Dict, Dict]:
         """Start a new episode.
 
         Args:
@@ -132,7 +139,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
 
         # Reset own vessel position to 0 -> MAYBE CONSIDER CHOOSING A RANDOM INITIAL SPEED AT THE BEGINNING OF EACH EPISODE FOR BETTER EXPLORATION
         self.own_vessel.reset(
-            random=True,
+            random=random,
             seed=seed,
             eta_min=np.array([-1, -1, 0, 0, 0, -0.2]),
             eta_max=np.array([1, 1, 0, 0, 0, 0.2]),
@@ -140,7 +147,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
             nu_max=np.array([self.desired_speed_range[1]]+5*[0])
         )
         for target_vessel in self.target_vessels:
-            target_vessel.reset()
+            target_vessel.reset(random=random)
 
         # Sample a new target position in [-20, 20] x [-20, 20]
         self.path = PWLPath.sample(**self.path_params, seed=seed)
@@ -159,7 +166,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
 
         return observation, info
 
-    def step(self, action) -> Tuple[Dict, float, bool, bool, Dict]:
+    def step(self, action, rescale:bool=True) -> Tuple[Dict, float, bool, bool, Dict]:
         """Execute one timestep within the environment.
 
         Args:
@@ -174,7 +181,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
         for _ in range(self.action_repeat):
             for vessel in self.target_vessels:
                 vessel.step(self.current, self.wind, self.obstacles, [])
-            self.own_vessel.step(self.current, self.wind, self.obstacles, self.target_vessels, control_commands=self.map_action_to_command(action))
+            self.own_vessel.step(self.current, self.wind, self.obstacles, self.target_vessels, control_commands=self.map_action_to_command(action, rescale=rescale))
 
         # Reward result of action
         reward = self.reward()
@@ -184,6 +191,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
 
         # Check for collisions with environment
         terminated = self.collision()
+        terminated = terminated or self.states_out_of_range()
 
         # We don't use truncation in this simple environment
         # (could add a step limit here if desired)
@@ -193,6 +201,19 @@ class GymPathTrackingReVoltEnv(gym.Env):
 
         return observation, reward, terminated, truncated, info
 
+    def states_out_of_range(self) -> float:
+        eta = np.array(self.own_vessel.eta.neyaw)
+        surge_speed = self.own_vessel.nu.u
+        eta_d = self.path.get_target_wpts_from(eta[0], eta[1], 0, 1)[0]
+        heading_absolute_error = abs(ssa(self.own_vessel.eta.yaw - eta_d[2]))
+        # print(f"heading error: {absolute_error:.1f}, h: {eta[2]:.1f}, hd: {eta_d[2]:.1f}")
+        # print(f"{self.desired_speed_range[0]:.2f} <= surge speed: {surge_speed:.2f} <= {self.desired_speed_range[1]:.2f}")
+        if heading_absolute_error > self.heading_max_error:
+            return True
+        elif (surge_speed > self.desired_speed_range[1]) or (surge_speed < self.desired_speed_range[0]):
+            return True
+        return False        
+
     def reward(self) -> float:
         eta = np.array(self.own_vessel.eta.neyaw)
         nu = np.array(self.own_vessel.nu.uvr)
@@ -200,7 +221,8 @@ class GymPathTrackingReVoltEnv(gym.Env):
         nu_d = np.array([self.desired_speed, 0, 0])
         force = np.array([actuator.thrust for actuator in self.own_vessel.actuators])
         alpha = np.array([actuator.u_actual_prev[0] for actuator in self.own_vessel.actuators])
-        return -self.cost(eta, nu, eta_d, nu_d, force, alpha) #float(np.exp(-self.cost(eta, nu, eta_d, nu_d, force, alpha)/10))
+        # print(self.cost(eta, nu, eta_d, nu_d, force, alpha)/1e2)
+        return float(np.exp(-self.cost(eta, nu, eta_d, nu_d, force, alpha)/1e2)) #float(np.exp(-self.cost(eta, nu, eta_d, nu_d, force, alpha)/10))
 
     def dist_to_target(self) -> float:
         ne = np.array(self.own_vessel.eta.neyaw[0:2])
@@ -225,7 +247,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
         ne = np.array([self.own_vessel.eta.n, self.own_vessel.eta.e])
         uvr = np.array(self.own_vessel.nu.uvr)
         distances, rel_yaws = [], []
-        for target in self.path.get_target_wpts_from(ne[0], ne[1], self.action_repeat*self.own_vessel.dt*self.desired_speed, self.horizon):
+        for target in self.path.get_target_wpts_from(ne[0], ne[1], self.dp or self.action_repeat*self.own_vessel.dt*self.desired_speed, self.horizon):
             delta = target[0:2] - ne
             distance = float(np.linalg.norm(delta))
             rel_yaw = ssa(self.own_vessel.eta[5] + np.atan2(-delta[1], delta[0]))
@@ -261,16 +283,33 @@ class GymPathTrackingReVoltEnv(gym.Env):
 
         }
     
-    def map_action_to_command(self, action) -> None:
+    def map_action_to_command(self, action, rescale:bool=True) -> None:
         """
-        Map the interval -1, 1 to the actuator range
+        Map the interval -1, 1 to the actuator range if rescale=True
+
+        rescale=False can be useful when action is produced by an MPC controller for instance.
+
+        action = [a1, n1, a2, n2, a3, n3] if self.controller_type=None elif self.controller_type="acados" action = [a1, a2, a3, n1, n2, n3]
         """
-        command = np.zeros_like(action)
+        # print("action: ", action)
+        command = []
         idx = 0
-        for actuator in self.own_vessel.actuators:
-            N_i = actuator.u_min.shape[0] # Number of commands expected for actuator i
-            command[idx:idx+N_i] = action[idx:idx+N_i] * (actuator.u_max - actuator.u_min) / 2  + (actuator.u_max + actuator.u_min) / 2
-            idx += N_i
+        if self.controller_type is None:
+            for actuator in self.own_vessel.actuators:
+                N_i = actuator.u_min.shape[0] # Number of commands expected for actuator i
+                if rescale:
+                    command.append(action[idx:idx+N_i] * (actuator.u_max - actuator.u_min) / 2  + (actuator.u_max + actuator.u_min) / 2)
+                else:
+                    command.append(action[idx:idx+N_i])
+                idx += N_i
+        elif self.controller_type == "acados":
+            idx_action = 0
+            for actuator in self.own_vessel.actuators:
+                N_i = actuator.u_min.shape[0] # Number of commands expected for actuator i
+                command.append(np.array([action[idx_action], action[idx_action+3]]))
+                idx += N_i
+                idx_action += 1
+        # print("action: ", action, "command: ", command)
         return command
     
     def init_action_space(self) -> None:
@@ -314,7 +353,7 @@ class GymPathTrackingReVoltEnv(gym.Env):
         self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
         
         # Update waypoints using set_data (works with Line2D objects)
-        wpts = self.path.get_target_wpts_from(*self.own_vessel.eta.ned[0:2], self.action_repeat*self.desired_speed*self.own_vessel.dt, self.horizon)
+        wpts = self.path.get_target_wpts_from(*self.own_vessel.eta.ned[0:2], self.dp or self.action_repeat*self.desired_speed*self.own_vessel.dt, self.horizon)
         if wpts:
             self.path_plot.set_data([wpt[1] for wpt in wpts], [wpt[0] for wpt in wpts])
         else:

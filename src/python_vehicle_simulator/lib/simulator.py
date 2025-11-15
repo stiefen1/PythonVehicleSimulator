@@ -57,6 +57,7 @@ class Simulator:
         
         for t in tqdm(np.linspace(0, tf, N)):
             obs, r, term, trunc, info, done = self.env.step(*args, **kwargs)
+            print([actuator.u_prev for actuator in self.env.own_vessel.actuators], self.env.own_vessel.nu.uvr)
             
             # Store state data for replay
             if store_data:
