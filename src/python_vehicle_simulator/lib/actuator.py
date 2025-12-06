@@ -211,6 +211,12 @@ class AzimuthThruster(IActuator):
     def __plot__(self, ax:Axes, eta:np.ndarray, *args, verbose:int=0, **kwargs) -> Axes:
         envelope = (ROTATION_MATRIX(self.orientation + self.u_actual_prev[0]) @ self.envelope.T) + self.xy[:, None]
         envelope_in_ned_frame = Rzyx(*eta[3:6].tolist())[0:2, 0:2] @ envelope + eta[0:2, None]
+
+        if self.efficiency < 1.0:
+            if 'c' in kwargs.keys():
+                kwargs['c'] = 'red'
+            else:
+                kwargs.update({'c': 'red'})
         ax.plot(envelope_in_ned_frame[1, :], envelope_in_ned_frame[0, :], *args, **kwargs)
         return ax
 
