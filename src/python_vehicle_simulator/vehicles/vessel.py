@@ -89,7 +89,7 @@ class IVessel(IDrawable):
         """
         # GNC
         ## Navigation: measure environments
-        measurements, navigation_info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels, tau_actuators=self.tau_actuators) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
+        measurements, navigation_info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels, *args, tau_actuators=self.tau_actuators, **kwargs) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
         # print("meas and info: ", measurements, info)
         # control_commands can be devised by an RL agent for example.
         if control_commands is None:

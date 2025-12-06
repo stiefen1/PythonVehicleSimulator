@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Tuple, Iterable, Dict
+from typing import Any, Tuple, Iterable, Dict, Optional
 import numpy as np
 from math import cos, sin
 from python_vehicle_simulator.lib.noise import INoise, NoNoise
@@ -11,7 +11,7 @@ class ISensor(ABC):
     def __init__(
             self,
             *args,
-            noise:INoise=None,
+            noise: Optional[INoise] = None,
             **kwargs
     ):
         self.noise = noise or NoNoise()
