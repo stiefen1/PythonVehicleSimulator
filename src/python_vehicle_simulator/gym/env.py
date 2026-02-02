@@ -217,7 +217,7 @@ class GymNavEnv(gym.Env):
                 "ne": gym.spaces.Box(-1.0, 1.0, shape=(2,)),            # Because we want the vessel to remain within bounds
                 "uvr": gym.spaces.Box(-1.0, 1.0, shape=(3,)),           # Surge-Sway-YawRate
                 "rel_target": gym.spaces.Box(-1.0, 1.0, shape=(2,)),    # Easier to figure out using relative pose
-                "rel_yaw": gym.spaces.Box(-1.0, 1.0, shape=(1,))        
+                "rel_yaw": gym.spaces.Box(-1.0, 1.0, shape=(1,))
             }
         )
 

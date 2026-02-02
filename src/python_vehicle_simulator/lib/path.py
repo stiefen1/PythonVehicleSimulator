@@ -14,6 +14,7 @@ class PWLPath(IDrawable):
             *args,
             verbose_level=0,
             input_format:Literal['north-east', 'east-north']='north-east',
+            flip: bool = False,
             **kwargs
     ):
         super().__init__(*args, verbose_level=verbose_level, **kwargs)
@@ -23,7 +24,7 @@ class PWLPath(IDrawable):
             for wpt in old_wpts:
                 waypoints.append((wpt[1], wpt[0]))
 
-        self.waypoints = np.array(waypoints)
+        self.waypoints = np.flip(waypoints, axis=0) if flip else np.array(waypoints)
         self.length = shapely.LineString(self.waypoints).length
         self.init_heading()
         self.prev_target_wpts = []
@@ -33,6 +34,24 @@ class PWLPath(IDrawable):
         for k in range(1, self.waypoints.shape[0]):
             dw = self.waypoints[k] - self.waypoints[k-1]
             self.heading.append(math.atan2(dw[1], dw[0]))
+
+    def interpolate(self, distance: float, normalized: bool = False) -> Tuple[float, float]:
+        point = shapely.LineString(self.waypoints).interpolate(distance=distance, normalized=normalized)
+        return point.x, point.y
+
+    def get_initial_pose(self, radians: bool = False) -> Tuple[float, float, float]:
+        """
+        Returns a 3d-tuple containing initial (north, east, heading) in NED frame (heading is clockwise positive)
+        """
+        linestring = shapely.LineString(self.waypoints)
+        point = linestring.interpolate(0)
+        next_point = linestring.interpolate(0.001)
+
+        # compute heading
+        heading = np.atan2((next_point.y - point.y), (next_point.x - point.x))
+
+        return point.x, point.y, heading if radians else np.rad2deg(heading)
+
 
     def closest_point(self, north:float, east:float) -> Tuple[float, float]:
         """
@@ -125,7 +144,7 @@ def test() -> None:
     import matplotlib.pyplot as plt
     path = PWLPath(
         [
-            (0, 0),
+            (-1, 0),
             (1, -0.5),
             (2.5, 1),
             (3, 2.5),
@@ -133,6 +152,7 @@ def test() -> None:
             (4, 5)
         ]
     )
+    print("Initial Pose (N, E, psi): ", path.get_initial_pose())
     p = (3, 3)
     ax = path.plot()
     ax.scatter(p[1], p[0], c='green')

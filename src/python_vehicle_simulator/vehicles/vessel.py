@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Any
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from python_vehicle_simulator.lib.guidance import IGuidance, Guidance
 from python_vehicle_simulator.lib.navigation import INavigation, Navigation
@@ -74,7 +74,7 @@ class IVessel(IDrawable):
     def __dynamics__(self, tau_actuators:np.ndarray, current:Current, wind:Wind, *args, **kwargs) -> np.ndarray:
         pass
 
-    def step(self, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List["IVessel"], *args, control_commands=None, **kwargs) -> Tuple[List, float, bool, bool, Dict, bool]:
+    def step(self, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List[Any], *args, control_commands=None, **kwargs) -> Tuple[Dict, float, bool, bool, Dict, bool]:
         """
         One step forward in time. Returns a tuple containing
 
