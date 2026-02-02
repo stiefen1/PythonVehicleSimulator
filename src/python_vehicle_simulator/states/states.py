@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Literal
 from python_vehicle_simulator.utils.math_fn import Rzyx
 class Eta:
     def __init__(self, n:float=0.0, e:float=0.0, d:float=0.0, roll:float=0.0, pitch:float=0.0, yaw:float=0.0):
@@ -20,8 +20,14 @@ class Eta:
     def __getitem__(self, idx:int) -> float:
         return self.to_list()[idx]
 
-    def to_numpy(self) -> np.ndarray:
-        return np.array(self.to_list(), float)
+    def to_numpy(self, dofs: Literal[3, 6] = 6) -> np.ndarray:
+        match dofs:
+            case 3:
+                return np.array(self.neyaw, float)
+            case 6:
+                return np.array(self.to_list(), float)
+            case _:
+                raise ValueError(f"dofs must be 3 or 6, got dofs={dofs}")
     
     def zeros_inplace(self) -> None:
         self.n, self.e, self.d, self.roll, self.pitch, self.yaw = 0., 0., 0., 0., 0., 0.
