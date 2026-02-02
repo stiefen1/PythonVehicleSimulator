@@ -129,8 +129,8 @@ class PWLPath(IDrawable):
 
     def __plot__(self, ax:Axes, *args, c='black', verbose:int=0, **kwargs) -> Axes:
         ax.plot(self.waypoints[:, 1], self.waypoints[:, 0], '--', *args, c=c, **kwargs)
-        for wpt in self.prev_target_wpts:
-            ax.scatter(wpt[1], wpt[0], c='red')
+        # for wpt in self.prev_target_wpts:
+        #     ax.scatter(wpt[1], wpt[0], c='red')
         return ax
 
     def __scatter__(self, ax:Axes, *args, **kwargs) -> Axes:

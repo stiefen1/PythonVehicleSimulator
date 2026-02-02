@@ -103,11 +103,11 @@ class MPCPathTrackingRevolt(IControl):
         self.actuators_dt = np.array([min(time_constant, self.dt) for time_constant in self.actuator_params.time_constant])
 
         # Hyperparameters
-        self.huber_penalty_slope = 10 # delta
+        self.huber_penalty_slope = 50 # 10 # delta
         self.huber_penalty_weight = 30 # q_x,y
-        self.heading_penalty_weight = 50 # 50 # q_psi
+        self.heading_penalty_weight = 100 # 50 # q_psi
         self.singular_value_penalty = 1e-3 # epsilon -> for nonsigular thruster configuration
-        self.singular_value_weight = 8e-4 # 1e-9 #  5e-4 # 1e-5 # rho -> for nonsigular thruster configuration
+        self.singular_value_weight = 1e-5 # 1e-6 # 1e-5 # 8e-4 # 1e-9 #  5e-4 # 1e-5 # rho -> for nonsigular thruster configuration
 
         self.Q = np.array([
             [1, 0, 0],
@@ -118,7 +118,7 @@ class MPCPathTrackingRevolt(IControl):
         self.Ra = np.eye(3) * 1e-2 # Azimuth weight matrix
         self.Rf = np.eye(3) * 1e-5 # 1e-1 # Force weight matrix
 
-        self.Theta_v = np.diag([1, 1, 1, 1, 1, 10])*0 # Terminal weight matrix
+        self.Theta_v = 0*np.diag([10, 10, 100, 1, 10, 10])*(gamma**self.horizon) # Terminal weight matrix
 
         self.gamma = gamma
         
@@ -368,7 +368,7 @@ class MPCPathTrackingRevolt(IControl):
         return solver_out
 
     def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, path:List[Tuple[float, float, float]], *args, delta=np.array([1, 1, 1]), sigma:np.ndarray=None, initial_guess=None, u_prev_actual:np.ndarray=None, **kwargs) -> List[np.ndarray]:
-        delta = np.array([1, 1, 1]) # disable adaptive MPC
+        # delta = np.array([1, 1, 1]) # disable adaptive MPC
 
         x0 = np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]])
         nu_des = np.array([nu_des[0], nu_des[1], nu_des[5]])
@@ -433,7 +433,7 @@ class MPCPathTrackingRevolt(IControl):
     def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         if self.XOpt is None:
             return ax
-        ax.scatter(self.XOpt[:, 1], self.XOpt[:, 0], c='green')
+        ax.plot(self.XOpt[:, 1], self.XOpt[:, 0], c='green', linewidth=2)
         return ax
         
     def plot_results(self):

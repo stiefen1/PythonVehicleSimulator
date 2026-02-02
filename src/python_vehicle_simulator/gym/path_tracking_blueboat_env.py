@@ -20,7 +20,9 @@ class GymPathTrackingBlueBoatEnv(gym.Env):
             render_mode:Literal['human', 'human3d']=None,
             path_params:Dict={'d_tot':50, 'max_turn_deg':30, 'seg_len_range': (5, 10), 'start': (0, 0), 'initial_angle':0},
             desired_speed_range:Tuple=(0.2, 0.7),
-            horizon:int=20
+            horizon:int=20,
+            max_steps:int=200,
+            wpts_space_multiplicator:int=1 # To add space between target waypoins
     ):
         self.own_vessel = own_vessel
         self.target_vessels = target_vessels
@@ -30,6 +32,7 @@ class GymPathTrackingBlueBoatEnv(gym.Env):
         self.path_params = path_params
         self.desired_speed_range = desired_speed_range
         self.horizon = horizon
+        self.wpts_space_multiplicator = wpts_space_multiplicator
 
         self.init_action_space()
         self.init_observation_space()
@@ -46,7 +49,7 @@ class GymPathTrackingBlueBoatEnv(gym.Env):
 
         # Current step (for plot purpose)
         self._step = 0
-        self.max_steps = 200 # i.e. 100 seconds for dt=0.02 and action_repeat=10
+        self.max_steps = max_steps # i.e. 100 seconds for dt=0.02 and action_repeat=10
 
         # observation space
         self.ne_range = {"min": np.array(2*[-self.path_params['d_tot']]), "max": np.array(2*[self.path_params['d_tot']])}
@@ -200,7 +203,7 @@ class GymPathTrackingBlueBoatEnv(gym.Env):
         ne = np.array([self.own_vessel.eta.n, self.own_vessel.eta.e])
         uvr = np.array(self.own_vessel.nu.uvr)
         distances, rel_yaws = [], []
-        for target in self.path.get_target_wpts_from(ne[0], ne[1], self.action_repeat*self.own_vessel.dt*self.desired_speed, self.horizon):
+        for target in self.path.get_target_wpts_from(ne[0], ne[1], self.action_repeat*self.own_vessel.dt*self.desired_speed*self.wpts_space_multiplicator, self.horizon):
             delta = target[0:2] - ne
             distance = float(np.linalg.norm(delta))
             rel_yaw = ssa(self.own_vessel.eta[5] + np.atan2(-delta[1], delta[0]))
@@ -270,8 +273,8 @@ class GymPathTrackingBlueBoatEnv(gym.Env):
             self.vessel_plot, = self.ax.plot([], [], label='Vessel')
             # Use plot instead of scatter for waypoints
             self.path_plot, = self.ax.plot([], [], 'go', markersize=3, label='Target Waypoints')
-            self.ax.set_xlim(-30, 30)
-            self.ax.set_ylim(-30, 30)
+            # self.ax.set_xlim(-30, 30)
+            # self.ax.set_ylim(-30, 30)
             self.path.plot(ax=self.ax)
             self.ax.set_xlabel('East')
             self.ax.set_ylabel('North')
@@ -284,13 +287,15 @@ class GymPathTrackingBlueBoatEnv(gym.Env):
         self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
         
         # Update waypoints using set_data (works with Line2D objects)
-        wpts = self.path.get_target_wpts_from(*self.own_vessel.eta.ned[0:2], self.action_repeat*self.desired_speed*self.own_vessel.dt, self.horizon)
+        wpts = self.path.get_target_wpts_from(*self.own_vessel.eta.ned[0:2], self.action_repeat*self.desired_speed*self.own_vessel.dt*self.wpts_space_multiplicator, self.horizon)
         if wpts:
             self.path_plot.set_data([wpt[1] for wpt in wpts], [wpt[0] for wpt in wpts])
         else:
             self.path_plot.set_data([], [])
         
         self.ax.set_title(f"Time: {self._step*self.action_repeat*self.own_vessel.dt:.1f} [s]")
+        self.ax.set_xlim((self.own_vessel.eta.e - 10, self.own_vessel.eta.e + 10))
+        self.ax.set_ylim((self.own_vessel.eta.n - 10, self.own_vessel.eta.n + 10))
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
     

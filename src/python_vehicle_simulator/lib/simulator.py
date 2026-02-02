@@ -2,7 +2,7 @@ from tqdm import tqdm
 import numpy as np, time
 import matplotlib.pyplot as plt
 from python_vehicle_simulator.lib.env import NavEnv
-from typing import Literal, Tuple, List, Union
+from typing import Literal, Tuple, List, Union, Optional
 from copy import deepcopy
 
 class Simulator:
@@ -41,7 +41,7 @@ class Simulator:
             }
         }
 
-    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, **kwargs) -> None:
+    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, **kwargs) -> None:
         """
         Run simulation from 0 to tf with sampling time self.dt
         """
@@ -55,7 +55,7 @@ class Simulator:
             self.simulation_data['obstacles'] = deepcopy(self.env.obstacles)
             self._store_current_state()
         
-        for t in tqdm(np.linspace(0, tf, N)):
+        for i, t in enumerate(tqdm(np.linspace(0, tf, N))):
             obs, r, term, trunc, info, done = self.env.step(*args, **kwargs)
             
             # Store state data for replay
@@ -64,6 +64,10 @@ class Simulator:
             
             if render and (self.skip_frames == 0 or (t//self.dt) % (self.skip_frames) == 0):
                 self.env.render(self.render_mode, verbose=self.verbose, window_size=self.window_size)
+
+                if savefig_every is not None:
+                    if i % savefig_every == 0:
+                        plt.savefig(f"{1000*t:.0f}_ms.png")
 
     def _clear_simulation_data(self):
         """Clear stored simulation data"""
@@ -844,7 +848,7 @@ class Simulator:
 
     def save_animation(self, filename: str = "simulation_animation", format: str = "gif", 
                    fps: int = 10, duration_per_frame: float = None, dpi: int = 100,
-                   skip_frames: int = None, figsize: Tuple[int, int] = (10, 8)) -> str:
+                   skip_frames: int = None, figsize: Tuple[int, int] = (10, 8), window_size: Optional[Tuple[float, float]] = None) -> str:
         """
         Generate and save an animation (GIF or MP4) from the stored simulation data.
         
@@ -972,8 +976,12 @@ class Simulator:
                                 label='Target Trail' if j == 0 else '')
             
             # Set plot properties
-            ax.set_xlim([x_min, x_max])
-            ax.set_ylim([y_min, y_max])
+            if window_size is not None:
+                ax.set_xlim((self.env.own_vessel.eta.e - window_size[0], self.env.own_vessel.eta.e + window_size[0]))
+                ax.set_ylim((self.env.own_vessel.eta.n - window_size[1], self.env.own_vessel.eta.n + window_size[1]))
+            else:
+                ax.set_xlim((x_min, x_max))
+                ax.set_ylim((y_min, y_max))
             ax.set_xlabel('East (m)', fontsize=12, fontweight='bold')
             ax.set_ylabel('North (m)', fontsize=12, fontweight='bold')
             ax.set_title(f"Vessel Simulation (t={t:.1f}s)", fontsize=14, fontweight='bold')
