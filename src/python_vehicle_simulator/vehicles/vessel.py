@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Union, Any
+from typing import Dict, List, Tuple, Union, Any, Optional, Literal
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from python_vehicle_simulator.lib.guidance import IGuidance, Guidance
 from python_vehicle_simulator.lib.navigation import INavigation, Navigation
@@ -12,12 +12,11 @@ from python_vehicle_simulator.lib.weather import Wind, Current
 from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.lib.actuator import IActuator
 from python_vehicle_simulator.lib.diagnosis import IDiagnosis, Diagnosis
-import numpy as np
+from python_vehicle_simulator.lib.dynamics import IDynamics
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from copy import deepcopy
-
-
+import numpy as np, numpy.typing as npt
 
 
 # Coordinates in NED frame. yaw is clockwise positive
@@ -37,24 +36,23 @@ VESSEL_GEOMETRY = lambda loa, beam: np.array([
 class IVessel(IDrawable):
     def __init__(
             self,
-            params,
-            dt,
+            loa: float,
+            beam: float,
+            dynamics: IDynamics,
             *args,
-            eta:Union[Eta, Tuple]=None,
-            nu:Union[Nu, Tuple]=None,
-            guidance:IGuidance=None,
-            navigation:INavigation=None,
-            control:IControl=None,
-            diagnosis:IDiagnosis=None,
-            actuators:List[IActuator]=None,
+            eta:Optional[Union[Eta, Tuple]]=None,
+            nu:Optional[Union[Nu, Tuple]]=None,
+            guidance:Optional[IGuidance]=None,
+            navigation:Optional[INavigation]=None,
+            control:Optional[IControl]=None,
+            diagnosis:Optional[IDiagnosis]=None,
             name:str='IVessel',
-            mmsi:str=None, # Maritime Mobile Service Identity number
+            mmsi:Optional[str]=None, # Maritime Mobile Service Identity number
             verbose_level:int=0,
             **kwargs
     ):
         super().__init__(verbose_level=verbose_level)
-        self.params = params
-        self.dt = dt
+        self.dynamics = dynamics
         self.eta = eta if isinstance(eta, Eta) else Eta(*eta) if eta is not None else Eta()
         self.nu = nu if isinstance(nu, Nu) else Nu(*nu) if nu is not None else Nu()
         self._eta_0 = deepcopy(self.eta)
@@ -62,19 +60,31 @@ class IVessel(IDrawable):
         self.guidance = guidance or Guidance()
         self.navigation = navigation or Navigation(self.eta.to_numpy(), self.nu.to_numpy())
         self.control = control or Control()
-        self.diagnosis = diagnosis or Diagnosis(eta=self.eta.to_numpy(), nu=self.nu.to_numpy(), params=None, dt=self.dt)
-        self.actuators = actuators or []
-        self.initial_geometry = VESSEL_GEOMETRY(self.params.loa, self.params.beam)
+        self.diagnosis = diagnosis or Diagnosis(eta=self.eta.to_numpy(), nu=self.nu.to_numpy(), params=None, dt=self.dynamics.dt)
+        self.initial_geometry = VESSEL_GEOMETRY(loa, beam)
         self.name = name
         self.mmsi = mmsi
         self.tau_actuators = None
         self.control_commands_prev = None
 
     @abstractmethod
-    def __dynamics__(self, tau_actuators:np.ndarray, current:Current, wind:Wind, *args, **kwargs) -> np.ndarray:
-        pass
+    def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> Tuple[List, List]:
+        disturbance = np.array([0, 0, 0]) # Define it as a function of current, wind
+        theta = theta if theta is not None else np.array([])
+        x = self.dynamics.fd(self.get_state(dofs=3), control_commands, theta, disturbance)
+        return x[0:3].tolist(), x[3:6].tolist()
 
-    def step(self, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List[Any], *args, control_commands=None, **kwargs) -> Tuple[Dict, float, bool, bool, Dict, bool]:
+    def step(
+            self,
+            current:Current,
+            wind:Wind,
+            obstacles:List[Obstacle],
+            target_vessels:List[Any],
+            *args,
+            control_commands: Optional[npt.NDArray] = None,
+            theta: Optional[npt.NDArray] = None,
+            **kwargs
+        ) -> Tuple[Dict, float, bool, bool, Dict, bool]:
         """
         One step forward in time. Returns a tuple containing
 
@@ -90,38 +100,25 @@ class IVessel(IDrawable):
         # GNC
         ## Navigation: measure environments
         measurements, navigation_info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels, *args, tau_actuators=self.tau_actuators, **kwargs) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
-        # print("meas and info: ", measurements, info)
-        # control_commands can be devised by an RL agent for example.
+        
+        ## Fault Diagnosis
+        diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info, u_actual=[actuator.info for actuator in self.actuators])
+        
+        ## Guidance: Get desired states
+        eta_des, nu_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info)
+
+        # Control commands can be devised by an RL agent for instance
         if control_commands is None:
-            ## Fault Diagnosis
-            diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info, u_actual=[actuator.info for actuator in self.actuators])
-            ## Guidance: Get desired states
-            eta_des, nu_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info)
             ## Control: Generate action to track desired states
             control_commands, control_info = self.control(eta_des, nu_des, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info)
 
-        # Actuators
-        tau_actuators = np.zeros((6,), float)
-        for i, (actuator, control_command) in enumerate(zip(self.actuators, control_commands)):
-            tau_i = actuator.dynamics(control_command, self.nu.to_numpy(), current, self.dt)
-            tau_actuators = tau_actuators + tau_i
-            # print(f"tau {i}: {tau_i}")
-
-        # USV Dynamics
-        nu_dot = self.__dynamics__(tau_actuators, current, wind, *args, **kwargs)
-
-        # Forward Euler integration of nu
-        nu = Euler(self.nu.to_numpy(), nu_dot, self.dt)
-
-        # Forward Euler integration of eta
-        eta_dot = self.eta_dot(self.nu.to_numpy())
-        eta = Euler(self.eta.to_numpy(), eta_dot, self.dt)
-        
+        ## USV Dynamics
+        eta, nu = self.__dynamics__(control_commands, current, wind)
         self.eta, self.nu = Eta(*eta), Nu(*nu)
-        self.tau_actuators = tau_actuators.copy()
+
         return (measurements, 0, False, False, {}, False)
     
-    def reset(self, random:bool=False, seed=None, eta_min:np.ndarray=None, eta_max:np.ndarray=None, nu_min:np.ndarray=None, nu_max:np.ndarray=None):
+    def reset(self, random:bool=False, seed=None, eta_min:Optional[npt.NDArray]=None, eta_max:Optional[npt.NDArray]=None, nu_min:Optional[npt.NDArray]=None, nu_max:Optional[npt.NDArray]=None):
         for actuator in self.actuators:
             actuator.reset(random=random, seed=seed)
 
@@ -141,7 +138,7 @@ class IVessel(IDrawable):
                 self.nu = Nu(*np.random.uniform(nu_min, nu_max).tolist())
 
 
-    def eta_dot(self, nu:np.ndarray):
+    def eta_dot(self, nu:npt.NDArray):
         p_dot   = np.matmul( Rzyx(*self.eta.to_list()[3:6]), nu[0:3] ) 
         v_dot   = np.matmul( Tzyx(*self.eta.to_list()[3:5]), nu[3:6] )
         return np.concatenate([p_dot, v_dot])
@@ -177,30 +174,29 @@ class IVessel(IDrawable):
             ax.fill(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
     
-    def get_geometry_from_pose(self, eta:Eta) -> np.ndarray:
+    def get_geometry_from_pose(self, eta:Eta) -> npt.NDArray:
         return Rzyx(*eta.rpy) @ self.initial_geometry + eta.to_numpy()[0:3].reshape(3, 1)
 
-    def get_geometry_in_frame(self, eta:Eta) -> np.ndarray:
+    def get_geometry_in_frame(self, eta:Eta) -> npt.NDArray:
         """
         get geometry in a frame specified by nedrpy
         """
         return Rzyx(*eta.rpy).T @ (Rzyx(*self.eta.rpy) @ self.initial_geometry - eta.to_numpy()[0:3].reshape(3, 1) + self.eta.to_numpy()[0:3].reshape(3, 1))
 
+    def get_state(self, dofs: Literal[3, 6] = 6) -> npt.NDArray:
+        return np.concatenate([self.eta.to_numpy(dofs=dofs), self.nu.to_numpy(dofs=dofs)])
+
     @property
-    def geometry(self) -> np.ndarray:
+    def geometry(self) -> npt.NDArray:
         return self.get_geometry_from_pose(self.eta)
     
     @property
-    def geometry_for_3D_plot(self) -> list[np.ndarray, np.ndarray]:
+    def geometry_for_3D_plot(self) -> Tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
         return self.geometry[1, :], self.geometry[0, :], -self.geometry[2, :]
     
     @property
-    def geometry_for_2D_plot(self) -> list[np.ndarray, np.ndarray]:
+    def geometry_for_2D_plot(self) -> Tuple[npt.NDArray, npt.NDArray]:
         return self.geometry_for_3D_plot[0:2]
-    
-    @property
-    def n_actuators(self) -> int:
-        return len(self.actuators)
     
 @dataclass
 class TestVesselParams:

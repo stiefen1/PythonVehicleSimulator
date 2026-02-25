@@ -64,8 +64,14 @@ class Nu:
     def __getitem__(self, idx:int) -> float:
         return self.to_list()[idx]
 
-    def to_numpy(self) -> np.ndarray:
-        return np.array(self.to_list(), float).T
+    def to_numpy(self, dofs: Literal[3, 6] = 6) -> np.ndarray:
+        match dofs:
+            case 3:
+                return np.array(self.uvr, float)
+            case 6:
+                return np.array(self.to_list(), float)
+            case _:
+                raise ValueError(f"dofs must be 3 or 6, got dofs={dofs}")
     
     def to_ned(self, roll:float, pitch:float, yaw:float) -> np.ndarray:
         return (Rzyx(roll, pitch, yaw) @ self.to_numpy()[0:3])
