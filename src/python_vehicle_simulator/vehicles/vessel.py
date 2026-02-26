@@ -1,16 +1,14 @@
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Union, Any, Optional, Literal
+from typing import Dict, List, Tuple, Any, Optional
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from python_vehicle_simulator.lib.guidance import IGuidance, Guidance
 from python_vehicle_simulator.lib.navigation import INavigation, Navigation
 from python_vehicle_simulator.lib.control import IControl, Control
-from python_vehicle_simulator.lib.integrator import Euler
 from python_vehicle_simulator.states.states import Eta, Nu
-from python_vehicle_simulator.utils.math_fn import Rzyx, Tzyx
+from python_vehicle_simulator.utils.math_fn import Rzyx
 from python_vehicle_simulator.lib.weather import Wind, Current
 from python_vehicle_simulator.lib.obstacle import Obstacle
-from python_vehicle_simulator.lib.actuator import IActuator
 from python_vehicle_simulator.lib.diagnosis import IDiagnosis, Diagnosis
 from python_vehicle_simulator.lib.dynamics import IDynamics
 from mpl_toolkits.mplot3d import Axes3D
@@ -39,40 +37,40 @@ class IVessel(IDrawable):
             loa: float,
             beam: float,
             dynamics: IDynamics,
+            states: Tuple,
             *args,
-            eta:Optional[Union[Eta, Tuple]]=None,
-            nu:Optional[Union[Nu, Tuple]]=None,
-            guidance:Optional[IGuidance]=None,
-            navigation:Optional[INavigation]=None,
-            control:Optional[IControl]=None,
-            diagnosis:Optional[IDiagnosis]=None,
-            name:str='IVessel',
-            mmsi:Optional[str]=None, # Maritime Mobile Service Identity number
-            verbose_level:int=0,
+            guidance:Optional[IGuidance] = None,
+            navigation:Optional[INavigation] = None,
+            control:Optional[IControl] = None,
+            diagnosis:Optional[IDiagnosis] = None,
+            name:str = 'IVessel',
+            mmsi:Optional[str] = None, # Maritime Mobile Service Identity number
+            verbose_level:int = 0,
             **kwargs
     ):
-        super().__init__(verbose_level=verbose_level)
+        super().__init__(verbose_level=verbose_level, **kwargs)
         self.dynamics = dynamics
-        self.eta = eta if isinstance(eta, Eta) else Eta(*eta) if eta is not None else Eta()
-        self.nu = nu if isinstance(nu, Nu) else Nu(*nu) if nu is not None else Nu()
+        self.states = np.array(states)
+        self.eta = Eta(*self.states[0:6])
+        self.nu = Nu(*self.states[6:12])
+        self._states_0 = deepcopy(self.states)
         self._eta_0 = deepcopy(self.eta)
         self._nu_0 = deepcopy(self.nu)
         self.guidance = guidance or Guidance()
-        self.navigation = navigation or Navigation(self.eta.to_numpy(), self.nu.to_numpy())
+        self.navigation = navigation or Navigation(self.states.copy())
         self.control = control or Control()
-        self.diagnosis = diagnosis or Diagnosis(eta=self.eta.to_numpy(), nu=self.nu.to_numpy(), params=None, dt=self.dynamics.dt)
+        self.diagnosis = diagnosis or Diagnosis(states=self.states.copy(), params=None, dt=self.dynamics.dt)
         self.initial_geometry = VESSEL_GEOMETRY(loa, beam)
         self.name = name
         self.mmsi = mmsi
-        self.tau_actuators = None
         self.control_commands_prev = None
 
     @abstractmethod
-    def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> Tuple[List, List]:
+    def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> np.ndarray:
         disturbance = np.array([0, 0, 0]) # Define it as a function of current, wind
-        theta = theta if theta is not None else np.array([])
-        x = self.dynamics.fd(self.get_state(dofs=3), control_commands, theta, disturbance)
-        return x[0:3].tolist(), x[3:6].tolist()
+        theta = theta if theta is not None else np.array(self.dynamics.nt*[1.0])
+        x = self.dynamics.fd(self.states, control_commands, theta, disturbance)
+        return x
 
     def step(
             self,
@@ -84,7 +82,7 @@ class IVessel(IDrawable):
             control_commands: Optional[npt.NDArray] = None,
             theta: Optional[npt.NDArray] = None,
             **kwargs
-        ) -> Tuple[Dict, float, bool, bool, Dict, bool]:
+        ) -> Tuple[np.ndarray, float, bool, bool, Dict, bool]:
         """
         One step forward in time. Returns a tuple containing
 
@@ -99,28 +97,26 @@ class IVessel(IDrawable):
         """
         # GNC
         ## Navigation: measure environments
-        measurements, navigation_info = self.navigation(self.eta.to_numpy(), self.nu.to_numpy(), current, wind, obstacles, target_vessels, *args, tau_actuators=self.tau_actuators, **kwargs) # obs = (eta_m, nu_m, current_m, wind_m, obstacles_m, target_vessels_m)
+        measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, **kwargs)
         
         ## Fault Diagnosis
-        diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info, u_actual=[actuator.info for actuator in self.actuators])
+        diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info)
         
         ## Guidance: Get desired states
-        eta_des, nu_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info)
+        states_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info)
 
         # Control commands can be devised by an RL agent for instance
         if control_commands is None:
             ## Control: Generate action to track desired states
-            control_commands, control_info = self.control(eta_des, nu_des, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info)
+            control_commands, control_info = self.control(states_des, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info)
 
         ## USV Dynamics
-        eta, nu = self.__dynamics__(control_commands, current, wind)
-        self.eta, self.nu = Eta(*eta), Nu(*nu)
+        self.states = self.__dynamics__(control_commands, current, wind, theta=theta)
+        self.eta, self.nu = Eta(*self.states[0:6]), Nu(*self.states[6:12])
 
-        return (measurements, 0, False, False, {}, False)
+        return (self.states, 0, False, False, {}, False)
     
     def reset(self, random:bool=False, seed=None, eta_min:Optional[npt.NDArray]=None, eta_max:Optional[npt.NDArray]=None, nu_min:Optional[npt.NDArray]=None, nu_max:Optional[npt.NDArray]=None):
-        for actuator in self.actuators:
-            actuator.reset(random=random, seed=seed)
 
         self.guidance.reset()
         self.navigation.reset()
@@ -137,12 +133,6 @@ class IVessel(IDrawable):
             if nu_min is not None and nu_max is not None:
                 self.nu = Nu(*np.random.uniform(nu_min, nu_max).tolist())
 
-
-    def eta_dot(self, nu:npt.NDArray):
-        p_dot   = np.matmul( Rzyx(*self.eta.to_list()[3:6]), nu[0:3] ) 
-        v_dot   = np.matmul( Tzyx(*self.eta.to_list()[3:5]), nu[3:6] )
-        return np.concatenate([p_dot, v_dot])
-
     def __plot__(self, ax, *args, verbose:int=0, **kwargs):
         """
         x = East
@@ -154,8 +144,6 @@ class IVessel(IDrawable):
         else:
             ax.scatter(self.eta[1], self.eta[0], *args, **kwargs)
             ax.plot(*self.geometry_for_2D_plot, *args, **kwargs)
-            for actuator in self.actuators:
-                actuator.plot(ax=ax, eta=self.eta.to_numpy(), *args, verbose=verbose, **kwargs)
         return ax
 
     def __scatter__(self, ax, *args, **kwargs):
@@ -183,9 +171,6 @@ class IVessel(IDrawable):
         """
         return Rzyx(*eta.rpy).T @ (Rzyx(*self.eta.rpy) @ self.initial_geometry - eta.to_numpy()[0:3].reshape(3, 1) + self.eta.to_numpy()[0:3].reshape(3, 1))
 
-    def get_state(self, dofs: Literal[3, 6] = 6) -> npt.NDArray:
-        return np.concatenate([self.eta.to_numpy(dofs=dofs), self.nu.to_numpy(dofs=dofs)])
-
     @property
     def geometry(self) -> npt.NDArray:
         return self.get_geometry_from_pose(self.eta)
@@ -198,117 +183,3 @@ class IVessel(IDrawable):
     def geometry_for_2D_plot(self) -> Tuple[npt.NDArray, npt.NDArray]:
         return self.geometry_for_3D_plot[0:2]
     
-@dataclass
-class TestVesselParams:
-    loa:float=10
-    beam:float=3
-
-
-class TestVessel(IVessel):
-    def __init__(
-            self,
-            params,
-            dt,
-            eta:Eta,
-            nu:Nu,
-            *args,
-            **kwargs
-    ):
-        super().__init__(params=params, dt=None, eta=eta, nu=nu, *args, **kwargs)
-
-    def __dynamics__(self, *args, **kwargs):
-        return super().__dynamics__(*args, **kwargs)
-
-def show_2D_vessel() -> None:
-    import matplotlib.pyplot as plt
-    params = TestVesselParams()
-    vessel = TestVessel(params, None, Eta(n=5, e=10, roll=0.5, pitch=0.5, yaw=1.2), Nu(u=1, v=0.1, r=0.0))
-    ax = vessel.fill(c='blue')
-    vessel.plot(ax=ax, c='red')
-    vessel.scatter(ax=ax, c='black')
-    ax.set_aspect('equal')
-    plt.show()
-
-def interactive_3D_vessel() -> None:
-    import matplotlib.pyplot as plt
-    from matplotlib.widgets import Slider
-    from python_vehicle_simulator.vehicles.vessel import TestVessel
-    from python_vehicle_simulator.states.states import Eta, Nu
-    from math import pi
-
-    # Initial vessel state
-    eta = Eta(n=0, e=0, d=0, roll=0, pitch=0, yaw=0)
-    nu = Nu(u=0, v=0, w=0, p=0, q=0, r=0)
-    params = TestVesselParams()
-    vessel = TestVessel(params, None, eta, nu)
-
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1, projection='3d')
-    plt.subplots_adjust(left=0.25, bottom=0.25)
-
-    # Initial plot
-    vessel.fill(ax=ax, facecolor='blue')
-    vessel.plot(ax=ax, c='red')
-    vessel.scatter(ax=ax, c='black')
-    ax.set_xlim([-6, 6])
-    ax.set_ylim([-6, 6])
-    ax.set_zlim([-6, 6])
-    ax.set_aspect('equal')
-
-    # Sliders
-    axcolor = 'lightgoldenrodyellow'
-    ax_roll = plt.axes([0.25, 0.15, 0.65, 0.03], facecolor=axcolor)
-    ax_pitch = plt.axes([0.25, 0.10, 0.65, 0.03], facecolor=axcolor)
-    ax_yaw = plt.axes([0.25, 0.05, 0.65, 0.03], facecolor=axcolor)
-
-    s_roll = Slider(ax_roll, 'Roll', -180, 180, valinit=0)
-    s_pitch = Slider(ax_pitch, 'Pitch', -90, 90, valinit=0)
-    s_yaw = Slider(ax_yaw, 'Yaw', -180, 180, valinit=0)
-
-    def update(val):
-        vessel.eta.roll = pi*s_roll.val/180
-        vessel.eta.pitch = pi*s_pitch.val/180
-        vessel.eta.yaw = pi*s_yaw.val/180
-        ax.cla()
-        vessel.fill(ax=ax, facecolor='blue')
-        vessel.plot(ax=ax, c='red')
-        vessel.scatter(ax=ax, c='black')
-        
-        ax.set_xlim([-6, 6])
-        ax.set_ylim([-6, 6])
-        ax.set_zlim([-6, 6])
-        ax.set_aspect('equal')
-        plt.draw()
-
-    s_roll.on_changed(update)
-    s_pitch.on_changed(update)
-    s_yaw.on_changed(update)
-
-    plt.show()
-
-def test_geometry_in_target_body_frame() -> None:
-    import matplotlib.pyplot as plt
-    params = TestVesselParams()
-    vessel = TestVessel(params, None, Eta(n=5, e=10, roll=0., pitch=0., yaw=2), Nu(u=1, v=0.1, r=0.0))
-    tv = TestVessel(params, None, Eta(n=5, e=20, roll=0., pitch=0., yaw=-0.5), Nu(u=1, v=0.1, r=0.0))
-    tv_geom = tv.get_geometry_in_frame(vessel.eta)
-
-
-    ax = vessel.fill(c='blue')
-    tv.fill(ax=ax, c='green')
-    ax.set_aspect('equal')
-    plt.show()
-
-    vessel.eta = Eta() # Plot in vessel frame
-    ax = vessel.fill(c='blue')
-    ax.plot(tv_geom[1, :], tv_geom[0, :], c='green')
-    vessel.plot(ax=ax, c='red')
-    vessel.scatter(ax=ax, c='black')
-    ax.set_aspect('equal')
-    plt.show()
-
-
-if __name__ == "__main__":
-    # show_2D_vessel()
-    # interactive_3D_vessel()
-    test_geometry_in_target_body_frame()

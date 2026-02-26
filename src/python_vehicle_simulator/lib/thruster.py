@@ -49,7 +49,7 @@ class ThrusterDynamics(IDynamics):
         else:
             self.time_constant = dt
 
-        super().__init__(1, 1, 1, 0, dt, *args, **kwargs)
+        super().__init__(2, 1, 1, 0, dt, *args, **kwargs)
 
     def continuous_time_dynamics(self, x: cs.SX, u: cs.SX, theta: cs.SX, disturbance: Optional[cs.SX], *args, **kwargs) -> cs.SX:
         """
@@ -58,7 +58,11 @@ class ThrusterDynamics(IDynamics):
         theta:          effectiveness               (np,)
         disturbance:    None                        (nd,)
         """
-        return (u - x) / self.time_constant
+        out = cs.SX.zeros(self.nx) # type: ignore
+        out[0] = (u - x[0]) / self.time_constant
+        out[1] =  2 * theta * self.thrust_coeff * out[0]
+        return out
+
 
 
 class Thruster(IActuator):
@@ -72,7 +76,6 @@ class Thruster(IActuator):
             dt: float,
             initial_speed: float = 0,
             time_constant: Optional[float] = None,
-            effectiveness: float = 1.0,
             length: float = THRUSTER_LENGTH_DEFAULT,
             width: float = THRUSTER_WIDTH_DEFAULT
     ):
@@ -100,7 +103,6 @@ class Thruster(IActuator):
         self.xy = numpy.array(xy)
         self.orientation_deg = orientation_deg
         self.thrust_coeff = thrust_coeff
-        self.effectiveness = effectiveness
         self.envelope = THRUSTER_GEOMETRY(length, width)
 
         self._orientation_rad = numpy.deg2rad(orientation_deg)
@@ -112,15 +114,15 @@ class Thruster(IActuator):
         """
         Thruster dynamics: updates speed and computes force/torque.
         
-        u:          Speed setpoint                  (1,)
-        theta:      Effectiveness parameter         (1,)
-        disturbance: Not used                       (0,)
+        u:              Speed setpoint                  (1,)
+        theta:          Effectiveness parameter         (1,)
+        disturbance:    Not used                        (0,)
         
         Returns:
             npt.NDArray: Force and torque [fx, fy, tau] (3,)
         """
         self.x = self.dynamics.fd(self.x, u, theta, disturbance).flatten()
-        thrust = self.thrust_coeff * self.effectiveness * self.x * self.x
+        thrust = self.thrust_coeff * theta * self.x * self.x
         return thrust * numpy.array([
             self._cos_orientation,
             self._sin_orientation,
@@ -139,12 +141,6 @@ class Thruster(IActuator):
         """
         envelope = (ROTATION_MATRIX(self._orientation_rad + self.x[0]) @ self.envelope.T) + self.xy[:, None]
         envelope_in_ned_frame = Rzyx(*eta[3:6].tolist())[0:2, 0:2] @ envelope + eta[0:2, None]
-
-        if self.effectiveness < 1.0:
-            if 'c' in kwargs.keys():
-                kwargs['c'] = 'red'
-            else:
-                kwargs.update({'c': 'red'})
         ax.plot(envelope_in_ned_frame[1, :], envelope_in_ned_frame[0, :], *args, **kwargs)
         return ax
     
@@ -161,7 +157,6 @@ if __name__ == "__main__":
         dt=dt,
         initial_speed=0,
         time_constant=1,
-        effectiveness=1
     )
 
     fig, ax = plt.subplots()
@@ -170,9 +165,10 @@ if __name__ == "__main__":
     xs = []
     for t in ts:
         xs.append(a1.x)
-        f = a1.step((120,))
         if t > 5:
-            a1.effectiveness = 0.5 
+            a1.effectiveness = 0.5
+        f = a1.step((120,))
+
         fs.append(f)
 
     fs = numpy.array(fs)

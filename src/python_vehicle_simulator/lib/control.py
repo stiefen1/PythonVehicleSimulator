@@ -12,16 +12,12 @@ Author:     Thor I. Fossen
 
 import numpy as np
 from python_vehicle_simulator.utils.math_fn import ssa, Rzyx
-from python_vehicle_simulator.utils.unit_conversion import DEG2RAD
 from python_vehicle_simulator.lib.weather import Current, Wind
 from python_vehicle_simulator.lib.obstacle import Obstacle
-from python_vehicle_simulator.lib.actuator import Thruster
 from python_vehicle_simulator.visualizer.drawable import IDrawable
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from abc import ABC, abstractmethod
-from math import sqrt
 from matplotlib.axes import Axes
-import keyboard
 
 class IControl(IDrawable, ABC):
     def __init__(
@@ -32,14 +28,14 @@ class IControl(IDrawable, ABC):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
         self.prev = {'u': None, 'info': None}
 
-    def __call__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
-        u, info = self.__get__(eta_des, nu_des, eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+    def __call__(self, states_des:np.ndarray, states:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
+        u, info = self.__get__(states_des, states, current, wind, obstacles, target_vessels, *args, **kwargs)
         self.prev = {'u': u, 'info': info}
         return u, info
 
     @abstractmethod
-    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
-        return [], {}
+    def __get__(self, states_des:np.ndarray, states:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
+        return np.array([]), {}
     
     @abstractmethod
     def reset(self):
@@ -62,176 +58,12 @@ class Control(IControl):
     ):
         super().__init__(*args, **kwargs)
 
-    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
-        return super().__get__(eta_des, nu_des, eta, nu, current, wind, obstacles, target_vessels, *args, **kwargs)
+    def __get__(self, states_des: np.ndarray, states: np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
+        return super().__get__(states_des, states, current, wind, obstacles, target_vessels, *args, **kwargs)
 
     def reset(self):
         pass
 
-class UserInputControlTwoTrusters(Control):
-    """
-
-    """
-    def __init__(
-            self,
-            *args,
-            **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-        speeds = {'zero': 0, 'low': 33, 'medium': 66, 'high': 100}
-        self.hashmap = {
-            '1': (speeds['zero'], speeds['zero']),
-            '2':(speeds['low'], speeds['zero']),
-            '3': (speeds['medium'], speeds['zero']),
-            '4': (speeds['high'], speeds['zero']),
-            'q': (speeds['zero'], speeds['low']),
-            'w': (speeds['low'], speeds['low']),
-            'e': (speeds['medium'], speeds['low']),
-            'r': (speeds['high'], speeds['low']),
-            'a': (speeds['zero'], speeds['medium']),
-            's': (speeds['low'], speeds['medium']),
-            'd': (speeds['medium'], speeds['medium']),
-            'f': (speeds['high'], speeds['medium']),
-            'y': (speeds['zero'], speeds['high']),
-            'x': (speeds['low'], speeds['high']),
-            'c': (speeds['medium'], speeds['high']),
-            'v': (speeds['high'], speeds['high'])
-        }
-        self.u = [np.array([0.0]), np.array([0.0])]
-
-    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
-        for key in self.hashmap.keys():
-            if keyboard.is_pressed(key):
-                self.u = [np.array(ui) for ui in self.hashmap[key]]
-        return self.u, {}
-
-class HeadingAutopilotTwoThrusters(IControl):
-    def __init__(
-            self,
-            actuators:Tuple[Thruster, Thruster],
-            dt:float,
-            *args,
-            tau_X:float = 120,
-            wn:float=2.5, 
-            zeta:float=1.0, 
-            wn_d:float=0.5, 
-            zeta_d:float=1.0, 
-            r_max:float=10*DEG2RAD,
-            **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-        self.actuators = actuators
-        self.tau_X = tau_X
-        self.e_int = 0.0 # Integral error
-        self.wn = wn  # PID natural frequency
-        self.zeta = zeta  # PID natural relative damping factor
-        self.wn_d = wn_d  # reference model natural frequency
-        self.zeta_d = zeta_d  # reference model relative damping factor
-        self.r_max = r_max # Maximum yaw rate
-        self.psi_d = 0.0 # angle, angular rate and angular acc. states
-        self.r_d = 0.0
-        self.a_d = 0.0
-        self.dt = dt
-        B = (0.02216 / 2) * np.array([[1, 1], [0.395, -0.395]])
-        self.Binv = np.linalg.inv(B)
-
-    def __get__(self, eta_des:np.ndarray, nu_des:np.ndarray, eta:np.ndarray, nu:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> List[np.ndarray]:
-        tau_x, tau_n = self.headingAutopilot(eta, nu, eta_des[5])
-        # print("tau_d: ", tau_x, tau_n)
-        # u = self.two_thrusters_control_allocation(tau_x, tau_n)
-        u = self.controlAllocation(tau_x, tau_n)
-        # print(u)
-        return u, {}
-    
-    def reset(self):
-        self.psi_d = 0.0
-        self.r_d = 0.0
-        self.a_d = 0.0
-        self.e_int = 0.0
-        for actuator in self.actuators:
-            actuator.reset()
-
-    def headingAutopilot(self, eta:np.ndarray, nu:np.ndarray, psi_setpoint:float):
-        """
-        u = headingAutopilot(eta,nu,dt) is a PID controller
-        for automatic heading control based on pole placement.
-
-        psi_setpoint is in radians.
-
-        tau_N = (T/K) * a_d + (1/K) * rd
-                - Kp * ( ssa( psi-psi_d ) + Td * (r - r_d) + (1/Ti) * z )
-
-                
-        Setpoint psi_ref ----> Reference Model ----> desired yaw psi_d (that keep reasonable jerk value) ----> PID Controller designed based on Pole Placement
-
-        """
-        psi = eta[5]  # yaw angle
-        r = nu[5]  # yaw rate
-        e_psi = psi - self.psi_d  # yaw angle tracking error --> PSI_D IS THE DESIRED VALUE ACCORDING TO THE REFERENCE MODEL
-        e_r = r - self.r_d  # yaw rate tracking error
-        psi_ref = psi_setpoint  # yaw angle setpoint --> THE ACTUAL VALUE WE WANT TO REACH
-
-        
-
-        m = 41.4  # moment of inertia in yaw including added mass
-        T = 1
-        K = T / m
-        d = 1 / K
-        k = 0
-
-        # PID feedback controller with 3rd-order reference model
-        tau_X = self.tau_X
-
-        [tau_N, self.e_int, self.psi_d, self.r_d, self.a_d] = PIDpolePlacement(
-            self.e_int,
-            e_psi,
-            e_r,
-            self.psi_d,
-            self.r_d,
-            self.a_d,
-            m,
-            d,
-            k,
-            self.wn_d,
-            self.zeta_d,
-            self.wn,
-            self.zeta,
-            psi_ref,
-            self.r_max,
-            self.dt,
-        )
-
-        return tau_X, tau_N
-
-    def two_thrusters_control_allocation(self, tau_x:float, tau_n:float) -> np.ndarray: #, y_1:float, y_2:float, k_pos_1:float, k_neg_1:float, k_pos_2:float, k_neg_2:float) 
-        """
-        y_1, y_2: signed position of actuators in sway
-        """
-        # self.actuators[0].xy[1], self.actuators[1].xy[1], self.actuators[0].k_pos, self.actuators[0].k_neg, self.actuators[1].k_pos, self.actuators[1].k_neg
-        ## First compute f1 and f2, i.e. force to be generated by each thruster
-        f_2 = (tau_x*self.actuators[0].xy[1]-tau_n)/(self.actuators[0].xy[1]-self.actuators[1].xy[1])
-        f_1 = tau_x - f_2
-
-        ## Then map these forces to actual propeller speed, taking rotation direction into account
-        n_1 = sqrt(f_1/self.actuators[0].k_pos) if f_1>=0 else -sqrt(-f_1/self.actuators[0].k_neg)
-        n_2 = sqrt(f_2/self.actuators[1].k_pos) if f_2>=0 else -sqrt(-f_2/self.actuators[1].k_neg)
-        return np.array([n_1, n_2])
-
-    def controlAllocation(self, tau_X, tau_N):
-        """
-        [n1, n2] = controlAllocation(tau_X, tau_N)
-
-        This formulation does not allow for negative force from the thruster, or at least is not consistent because Binv is computed 
-        using k_pos in cases
-        """
-        tau = np.array([tau_X, tau_N])  # tau = B * u_alloc
-        u_alloc = np.matmul(self.Binv, tau)  # u_alloc = inv(B) * tau
-
-        # u_alloc = abs(n) * n --> n = sign(u_alloc) * sqrt(u_alloc)
-        n1 = np.sign(u_alloc[0]) * sqrt(abs(u_alloc[0]))
-        n2 = np.sign(u_alloc[1]) * sqrt(abs(u_alloc[1]))
-
-        return n1, n2
 
 # SISO PID pole placement
 def PIDpolePlacement(

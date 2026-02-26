@@ -1,4 +1,4 @@
-import numpy, numpy.typing as npt, casadi as cs
+import numpy as np, numpy.typing as npt, casadi as cs
 from abc import ABC, abstractmethod
 from typing import Literal, Tuple, Optional, get_args
 
@@ -13,7 +13,7 @@ class IDynamics(ABC):
             self,
             nx: int,    # States
             nu: int,    # Control inputs
-            np: int,    # Number of parameters
+            nt: int,    # Number of parameters theta
             nd: int,    # Number of disturbances
             dt: float,  # Sampling time
             *args,
@@ -21,7 +21,7 @@ class IDynamics(ABC):
     ):
         self.nx = nx # States
         self.nu = nu # Control inputs
-        self.np = np # Number of parameters
+        self.nt = nt # Number of parameters
         self.nd = nd # Number of disturbances
         self.dt = dt # Sampling time
 
@@ -32,8 +32,8 @@ class IDynamics(ABC):
         """
         x:              states                      (nx,)
         u:              control commands            (nu,)
-        theta:          parameters (e.g. faults)    (np,)
-        disturbance:    disturbance (e.g. wind)    (nd,)
+        theta:          parameters (e.g. faults)    (nt,)
+        disturbance:    disturbance (e.g. wind)     (nd,)
         """
         pass
 
@@ -46,7 +46,7 @@ class IDynamics(ABC):
         """
         x = cs.SX.sym('x', self.nx)                     # type: ignore
         u = cs.SX.sym('u', self.nu)                     # type: ignore
-        theta = cs.SX.sym('theta', self.np)             # type: ignore
+        theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
 
         return cs.Function('continuous_time_dynamics', [x, u, theta, disturbance], [self.continuous_time_dynamics(x, u, theta, disturbance)])
@@ -77,7 +77,7 @@ class IDynamics(ABC):
         """
         x = cs.SX.sym('x', self.nx)                     # type: ignore
         u = cs.SX.sym('u', self.nu)                     # type: ignore
-        theta = cs.SX.sym('theta', self.np)             # type: ignore
+        theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
 
         return (
@@ -98,7 +98,7 @@ class IDynamics(ABC):
         """
         x = cs.SX.sym('x', self.nx)                     # type: ignore
         u = cs.SX.sym('u', self.nu)                     # type: ignore
-        theta = cs.SX.sym('theta', self.np)             # type: ignore
+        theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
 
         # RK4 integration
@@ -121,7 +121,7 @@ class IDynamics(ABC):
         """
         x = cs.SX.sym('x', self.nx)                     # type: ignore
         u = cs.SX.sym('u', self.nu)                     # type: ignore
-        theta = cs.SX.sym('theta', self.np)             # type: ignore
+        theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
         
         # Euler integration: x_next = x + dt * f(x, u, theta)
@@ -147,13 +147,13 @@ class IDynamics(ABC):
         
         x:              current states              (nx,)
         u:              control commands            (nu,)  
-        theta:          parameters                  (np,)
+        theta:          parameters                  (nt,)
         disturbance:    disturbance (e.g. wind)     (nd,)
         
         Returns:
             npt.NDArray: State matrix A (nx, nx)
         """
-        return numpy.array(self._A_function(x, u, theta, disturbance))
+        return np.array(self._A_function(x, u, theta, disturbance))
     
     def B(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
@@ -161,13 +161,13 @@ class IDynamics(ABC):
         
         x:              current states              (nx,)
         u:              control commands            (nu,)  
-        theta:          parameters                  (np,)
+        theta:          parameters                  (nt,)
         disturbance:    disturbance (e.g. wind)     (nd,)
         
         Returns:
             npt.NDArray: Input matrix B (nx, nu)
         """
-        return numpy.array(self._B_function(x, u, theta, disturbance))
+        return np.array(self._B_function(x, u, theta, disturbance))
     
     def Ad(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
@@ -175,13 +175,13 @@ class IDynamics(ABC):
         
         x:              current states              (nx,)
         u:              control commands            (nu,)  
-        theta:          parameters                  (np,)
+        theta:          parameters                  (nt,)
         disturbance:    disturbance (e.g. wind)     (nd,)
         
         Returns:
             npt.NDArray: Discrete state matrix Ad (nx, nx)
         """
-        return numpy.array(self._Ad_function(x, u, theta, disturbance))
+        return np.array(self._Ad_function(x, u, theta, disturbance))
     
     def Bd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
@@ -189,13 +189,13 @@ class IDynamics(ABC):
         
         x:              current states              (nx,)
         u:              control commands            (nu,)  
-        theta:          parameters                  (np,)
+        theta:          parameters                  (nt,)
         disturbance:    disturbance (e.g. wind)     (nd,)
         
         Returns:
             npt.NDArray: Discrete input matrix Bd (nx, nu)
         """
-        return numpy.array(self._Bd_function(x, u, theta, disturbance))
+        return np.array(self._Bd_function(x, u, theta, disturbance))
     
     def f(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
@@ -203,13 +203,13 @@ class IDynamics(ABC):
         
         x:              current states              (nx,)
         u:              control commands            (nu,)  
-        theta:          parameters                  (np,)
+        theta:          parameters                  (nt,)
         disturbance:    disturbance (e.g. wind)     (nd,)
         
         Returns:
             npt.NDArray: State derivatives dx/dt (nx,)
         """
-        return numpy.array(self._f(x, u, theta, disturbance))
+        return np.array(self._f(x, u, theta, disturbance))
     
     def fd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
@@ -217,13 +217,13 @@ class IDynamics(ABC):
         
         x:              current states              (nx,)
         u:              control commands            (nu,)  
-        theta:          parameters                  (np,)
+        theta:          parameters                  (nt,)
         disturbance:    disturbance (e.g. wind)     (nd,)
         
         Returns:
             npt.NDArray: Next states x[k+1] (nx,)
         """
-        return numpy.array(self._fd(x, u, theta, disturbance))
+        return np.array(self._fd(x, u, theta, disturbance))
 
     
 if __name__ == "__main__":

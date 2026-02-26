@@ -1,4 +1,4 @@
-import numpy as np
+import numpy as np, numpy.typing as npt
 from typing import List, Tuple, Literal
 from python_vehicle_simulator.utils.math_fn import Rzyx
 class Eta:
@@ -31,6 +31,10 @@ class Eta:
     
     def zeros_inplace(self) -> None:
         self.n, self.e, self.d, self.roll, self.pitch, self.yaw = 0., 0., 0., 0., 0., 0.
+
+    @staticmethod
+    def from_ndofs_states(states: Tuple | npt.NDArray | List, ndofs: Literal[3, 6]) -> "Eta":
+        return Eta(n=states[0], e=states[1], yaw=states[2]) if ndofs==3 else Eta(*states[0:6])
     
     @property
     def rpy(self) -> Tuple[float, float, float]:
@@ -78,6 +82,10 @@ class Nu:
     
     def zeros_inplace(self) -> None:
         self = Nu()
+
+    @staticmethod
+    def from_ndofs_states(states: Tuple | npt.NDArray | List, ndofs: Literal[3, 6]) -> "Nu":
+        return Nu(u=states[3], v=states[4], r=states[5]) if ndofs==3 else Nu(*states[6:12])
 
     @property
     def uvw(self) -> Tuple[float, float, float]:

@@ -30,55 +30,45 @@ R_REVOLT = np.diag([1e-2, 1e-2, 0.2*np.pi/180, 5e-2, 5e-2, 5e-2])
 class IDiagnosis(ABC):
     def __init__(
             self,
-            eta:np.ndarray,
-            nu:np.ndarray,
+            states: np.ndarray,
             params,
             dt:float,
             *args,
-            u_actual:List[np.ndarray]=None,
             **kwargs
     ):
         self.params = params # PARAMETERS DEPEND ON WHAT WE WANT TO DIAGNOSE
-        self.eta = eta
-        self.nu = nu
+        self.states = states
         self.dt = dt
-        self.u_actual = u_actual
         self.prev = {'diagnosis': None, 'info': None}
 
-    def get(self, eta:np.ndarray, nu:np.ndarray, u_actual:List[np.ndarray], *args, **kwargs) -> Tuple[Dict, Dict]:
-        diagnosis, info = self.__get__(eta, nu, u_actual, *args, **kwargs)
-        self.eta = eta.copy()
-        self.nu = nu.copy()
-        self.u_actual = u_actual
+    def get(self, states:np.ndarray, *args, **kwargs) -> Tuple[Dict, Dict]:
+        diagnosis, info = self.__get__(states, *args, **kwargs)
+        self.states = states.copy()
         self.prev = {'diagnosis': diagnosis, 'info': info}
         return diagnosis, info # diagnosis and info
 
     @abstractmethod
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List[np.ndarray], *args, **kwargs) -> Tuple[Dict, Dict]:
+    def __get__(self, states:np.ndarray, *args, **kwargs) -> Tuple[Dict, Dict]:
         return {}, {}
     
-    def __call__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List[np.ndarray], *args, **kwargs) -> Tuple[Dict, Dict]:
-        return self.get(eta, nu, u_actual, *args, **kwargs)
+    def __call__(self, states:np.ndarray, *args, **kwargs) -> Tuple[Dict, Dict]:
+        return self.get(states, *args, **kwargs)
     
 class Diagnosis(IDiagnosis):
     def __init__(
             self,
-            eta:np.ndarray,
-            nu:np.ndarray,
+            states: np.ndarray,
             params,
             dt:float,
             *args,
-            u_actual:List[np.ndarray]=None,
             **kwargs
     ):
         self.params = params # PARAMETERS DEPEND ON WHAT WE WANT TO DIAGNOSE
-        self.eta = eta
-        self.nu = nu
+        self.states = states
         self.dt = dt
-        self.u_actual = u_actual
 
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List[np.ndarray], *args, **kwargs) -> Tuple[Dict, Dict]:
-        return super().__get__(eta, nu, u_actual, *args, **kwargs)
+    def __get__(self, states:np.ndarray, *args, **kwargs) -> Tuple[Dict, Dict]:
+        return super().__get__(states, *args, **kwargs)
     
 def deep_simplify(expr):
     """Try multiple simplification strategies"""
@@ -99,16 +89,14 @@ class DiagnosisOfRevolt3Actuators(IDiagnosis):
 
     def __init__(
             self,
-            eta:np.ndarray,
-            nu:np.ndarray,
+            states:np.ndarray,
             dt:float,
             *args,
             delta0:np.ndarray=np.ones((3,)),
             **kwargs
     ) -> None:
         super().__init__(
-            eta=eta.copy(),
-            nu=nu.copy(),
+            states=states.copy(),
             params=delta0.copy(),
             dt=dt,
             *args,
@@ -117,7 +105,7 @@ class DiagnosisOfRevolt3Actuators(IDiagnosis):
         self.init_model()
 
     # Not required but here for testing purpose
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List[np.ndarray], *args, **kwargs) -> Tuple[Dict, Dict]:
+    def __get__(self, states:np.ndarray, *args, **kwargs) -> Tuple[Dict, Dict]:
         return {}, {}
 
     def init_model(self) -> None:
@@ -178,12 +166,6 @@ class DiagnosisOfRevolt3Actuators(IDiagnosis):
             [0, -params.Nv, -params.Nr]
         ])
 
-        # TODO: IMPLEMENT ACTUATORS DYNAMICS USING ACTUAL VALUES
-        # T = lambda alpha, lx, ly : np.array([
-        #     ca.cos(alpha),
-        #     ca.sin(alpha),
-        #     lx*ca.sin(alpha) - ly * ca.cos(alpha)
-        # ])
 
         # tau u
         tau_u = d1 * actuators_params.k_pos[0] * sp.cos(a1) * n1**2 # * sp.Abs(n1) # th1 *n1 + ...
@@ -234,23 +216,22 @@ class DiagnosisOfRevolt3Actuators(IDiagnosis):
 class GradientDescentDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
     def __init__(
             self,
-            eta:np.ndarray,
-            nu:np.ndarray,
+            states:np.ndarray,
             dt:float,
             *args,
             lr:float = 1e3, # learning rate
             delta0:np.ndarray=np.ones((3,)),
             **kwargs
     ) -> None:
-        super().__init__(eta=eta, nu=nu, dt=dt, *args, delta0=delta0, **kwargs)
+        super().__init__(states=states, dt=dt, *args, delta0=delta0, **kwargs)
         self.lr = lr
 
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List, *args, **kwargs) -> Dict:
-        eta_prev, nu_prev = self.eta, self.nu
-        a1, n1 = u_actual[0]['u_actual'].tolist() # u_actual is the previous command input
-        a2, n2 = u_actual[1]['u_actual'].tolist()
-        a3, n3 = u_actual[2]['u_actual'].tolist()
-        x = np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]])[:, None]
+    def __get__(self, states:np.ndarray, *args, **kwargs) -> Tuple[Dict, Dict]:
+        eta_prev, nu_prev = self.states[0:6], self.states[6:12]
+        a1, n1 = states[12], states[15] 
+        a2, n2 = states[13], states[16]
+        a3, n3 = states[14], states[17]
+        x = np.array([states[0], states[1], states[5], states[6], states[7], states[11]])[:, None]
         error = self.f_lambda(eta_prev[0], eta_prev[1], eta_prev[5], nu_prev[0], nu_prev[1], nu_prev[5], a1, n1, a2, n2, a3, n3, self.params[0], self.params[1], self.params[2]) - x
         dfddelta = self.Jdelta_lambda(eta_prev[0], eta_prev[1], eta_prev[5], nu_prev[0], nu_prev[1], nu_prev[5], a1, n1, a2, n2, a3, n3)
         gradient = 2 * error.T @ dfddelta
@@ -262,117 +243,7 @@ class GradientDescentDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
         
         self.params = np.clip((self.params - self.lr * gradient)[0], 0, 1)
         info = {}
-        # print('delta: ', self.params)
         return {'delta': self.params}, info
-    
-class ParticleFilterDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
-    def __init__(
-            self,
-            eta:np.ndarray,
-            nu:np.ndarray,
-            dt:float,
-            meas_cov:np.ndarray,
-            process_cov:np.ndarray,
-            *args,
-            n_particles:int = 100, # Number of particles
-            delta0:np.ndarray=np.ones((3,)),
-            effective_size_thresh:int = None,
-            **kwargs
-    ) -> None:
-        super().__init__(eta=eta, nu=nu, dt=dt, *args, delta0=delta0, **kwargs)
-        self.meas_cov_inv:np.ndarray = np.linalg.inv(meas_cov)
-        self.process_cov:np.ndarray = process_cov
-        self.n_particles = n_particles
-        self.effective_size_thresh = effective_size_thresh or n_particles // 10
-        self.particles = np.ones((self.n_particles, 3)) * delta0
-        self.weights = np.ones((self.n_particles,)) / self.n_particles
-
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List, *args, **kwargs) -> Dict:
-        eta_prev, nu_prev = self.eta, self.nu
-        y = np.array([eta[0], eta[1], eta[5], nu[0], nu[1], nu[5]]) # Measurements
-        # print("y: ", y)
-        a1, n1 = u_actual[0]['u_actual'].tolist()
-        a2, n2 = u_actual[1]['u_actual'].tolist()
-        a3, n3 = u_actual[2]['u_actual'].tolist()
-
-        # FT = self.FT_lambda(a1, n1, a2, n2, a3, n3, 1, 1, 1) # delta = [1, 1, 1]
-        # if np.linalg.det(FT) != 0:
-        #     FT_inv = np.linalg.inv(FT)
-        #     d = FT_inv @ 
-        
-        x_hat = np.ndarray((6, self.n_particles))
-        # process_noise = np.random.multivariate_normal(np.zeros(3), self.process_cov, size=self.n_particles)
-        # new_particles = np.clip(self.particles + process_noise, 0, 1)
-        # process_noise = np.array([0., 0., 0.])
-        new_particles = self.particles.copy()
-        p = np.random.uniform(0, 1, 3)
-        for particle in new_particles:
-            for i in range(3):
-                if p[i] > 0.8:
-                    e = np.random.uniform(-0.2, 0.2)
-                    particle[i] = particle[i] + e
-            
-        new_particles = np.clip(new_particles, 0, 1)
-
-        # new_particles = self.particles + process_noise
-
-        
-        # Process model
-        for i in range(self.n_particles):
-            # print("particle i: ", new_particles[i])
-            x_hat[:, i] = self.f_lambda(
-                eta_prev[0], eta_prev[1], eta_prev[5], nu_prev[0], nu_prev[1], nu_prev[5],
-                a1, n1, a2, n2, a3, n3,
-                new_particles[i, 0], new_particles[i, 1], new_particles[i, 2]
-            )[:, 0]
-
-        # plt.figure()
-        # plt.scatter(x_hat[3, :], x_hat[4, :])
-        # plt.title(f"u vs v - {self.n_particles}")
-        # plt.show() 
-        # plt.waitforbuttonpress()
-
-        
-        # Update weights
-        diff = x_hat - y[:, None]                       # shape (6, N)
-        quad_form = np.einsum('ij,jk,ik->i', diff.T, self.meas_cov_inv, diff.T)  # length N
-        likelihood = self.weights * np.exp(-0.5 * quad_form)
-        # likelihood = self.weights * np.exp(-0.5*np.diag((x_hat-y[:, None]).T @ self.meas_cov @ (x_hat-y[:, None]))) # Check likelihood of this w.r.t measurement noise
-
-        if np.sum(likelihood) > 1e-9:
-            self.weights = likelihood / np.sum(likelihood)
-        else:
-            self.weights = np.ones((self.n_particles,)) / self.n_particles
-
-
-        # Find best
-        # best_particle = np.sum(self.weights[:, None] * new_particles, axis=0)
-        # best_particle = new_particles[np.argmax(self.weights)]
-
-        K = self.n_particles // 10  # or any number <= n_particles
-        # 1) Get indices of particles with largest weights
-        topK_idx = np.argsort(self.weights)[-K:]  # last K indices have largest weights
-        # 2) Take weighted average among these K particles
-        topK_weights = self.weights[topK_idx]
-        topK_weights /= np.sum(topK_weights)     # normalize weights
-        best_particle = np.sum(new_particles[topK_idx] * topK_weights[:, None], axis=0)
-
-        # Resample with probability self.weights pick new_particles, if effective sample size < threshold
-        effective_sample_size = 1 / np.sum(np.square(self.weights))
-        if effective_sample_size < self.effective_size_thresh:
-            # print("Resample!")
-            # Draw N indices according to weights
-            indices = np.random.choice(self.n_particles, size=self.n_particles, p=self.weights)
-            # Resample particles and reset weights
-            new_particles = new_particles[indices]
-            self.weights = np.ones(self.n_particles) / self.n_particles
-
-        self.particles = new_particles.copy()
-        # print("std: ", np.std(self.particles, axis=0))
-        # print("sample size: ", effective_sample_size)
-
-        info = {'particles': new_particles.copy().T, 'top-k-particles': new_particles[topK_idx].copy().T, 'sigma': np.std(new_particles[topK_idx], axis=0)}
-        return {'delta': best_particle}, info
     
 class AugmentedEKFDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators, IExtendedKalmanFilter):
     """
@@ -380,8 +251,7 @@ class AugmentedEKFDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators, IExtend
     """
     def __init__(
             self,
-            eta_0:np.ndarray,
-            nu_0:np.ndarray,
+            states_0:np.ndarray,
             dt:float,
             *args,
             Q:np.ndarray = np.eye(9), # Process noise -> Small means we trust our model A LOT                               # When using 1e-5 for Both Q and R results are okay
@@ -391,9 +261,9 @@ class AugmentedEKFDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators, IExtend
             **kwargs
     ) -> None:
         Q[0:6, 0:6] = Q_REVOLT
-        DiagnosisOfRevolt3Actuators.__init__(self, eta=eta_0, nu=nu_0, dt=dt, *args, delta0=efficiency_0, **kwargs)
-        eta_0_3dof = np.array([eta_0[0], eta_0[1], eta_0[5]])
-        nu_0_3dof = np.array([nu_0[0], nu_0[1], nu_0[5]])
+        DiagnosisOfRevolt3Actuators.__init__(self, states=states_0, dt=dt, *args, delta0=efficiency_0, **kwargs)
+        eta_0_3dof = np.array([states_0[0], states_0[1], states_0[5]])
+        nu_0_3dof = np.array([states_0[6], states_0[7], states_0[11]])
         IExtendedKalmanFilter.__init__(self, Q=Q, R=R, x0=np.concatenate([eta_0_3dof, nu_0_3dof, efficiency_0]), P0=P0, dt=dt)
         self.init_model()
 
@@ -521,37 +391,20 @@ class AugmentedEKFDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators, IExtend
         return np.hstack([np.eye(6), np.zeros((6, 3))])
 
 
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List, *args, **kwargs) -> Dict:
-        eta = np.array([eta[0], eta[1], eta[5]]) # Measurements
-        nu = np.array([nu[0], nu[1], nu[5]])
-        a1, n1 = u_actual[0]['u_actual'].tolist() # u_actual is the previous command input
-        a2, n2 = u_actual[1]['u_actual'].tolist()
-        a3, n3 = u_actual[2]['u_actual'].tolist()
+    def __get__(self, states:np.ndarray, *args, **kwargs) -> Tuple[Dict, Dict]:
+        eta = np.array([states[0], states[1], states[5]]) # Measurements
+        nu = np.array([states[6], states[7], states[11]])
+        a1, n1 = states[12], states[15] 
+        a2, n2 = states[13], states[16]
+        a3, n3 = states[14], states[17]
         prediction = self.predict(np.array([a1, n1, a2, n2, a3, n3]))
-        # print("EKF Fault Diagnosis: ", prediction[0:6]-np.concatenate([eta, nu]))
+        # print("EKF Fault Diagnosis: ", prediction[0:6]-np.concatenate([states]))
         print("Prediction covariance: ", np.diag(self.P)[6:9])
-        self.update(np.concatenate([eta, nu]))
+        self.update(np.concatenate([states]))
         self.params = self.x[6:9]
         info = {}
         return {'delta': self.params}, info
-    
-class LinearParametersEstimationDiagnosisRevolt3Actuators(DiagnosisOfRevolt3Actuators):
-    def __init__(
-            self,
-            eta:np.ndarray,
-            nu:np.ndarray,
-            dt:float,
-            *args,
-            n_particles:float = 100, # Number of particles
-            delta0:np.ndarray=np.ones((3,)),
-            **kwargs
-    ) -> None:
-        super().__init__(eta=eta, nu=nu, dt=dt, *args, delta0=delta0, **kwargs)
-        self.n_particles = n_particles
 
-    def __get__(self, eta:np.ndarray, nu:np.ndarray, u_actual:List, *args, **kwargs) -> Dict:
-        info = {}
-        return {}, info
     
 def test() -> None:
     import numpy as np
@@ -566,8 +419,7 @@ def test() -> None:
     d = d0.copy() 
 
     diagnoser = DiagnosisOfRevolt3Actuators(
-        np.array(6*[0]),
-        np.array(6*[0]),
+        np.array(18*[0]),
         dt=0.01
     )
 
@@ -584,9 +436,6 @@ def test() -> None:
 
     print(f)
     print(f_approx)
-    # print(A0 @ (x-x0))
-    # print(B0 @ (u-u0))
-    # print(np.linalg.matrix_rank(E0))
 
 if __name__ == "__main__":
     test()
