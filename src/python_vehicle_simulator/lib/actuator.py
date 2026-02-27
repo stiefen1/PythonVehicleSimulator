@@ -21,6 +21,7 @@ THRUSTER_GEOMETRY = lambda L, W: np.array([
     (-L/2, W/2),
     (-L/2, -W/2),
     (L/2, -W/2),
+    (1.2*(L/2), 0),
     (L/2, W/2)
 ])
 
@@ -72,7 +73,7 @@ class IActuator(IDrawable):
 
     def dynamics(self, u:np.ndarray, nu:np.ndarray, current:Current, dt:float, *args, **kwargs) -> np.ndarray:
         """
-            Wrapper for __dynamics__. Add saturation to actuator input commands
+            Wrapper for __dynamics__. Add saturation and time constant to actuator input commands
         """
         self.u_prev = u.copy()
         u_dot = (u-self.u_actual_prev) / self.time_const
@@ -195,7 +196,7 @@ class AzimuthThruster(IActuator):
 
     def __dynamics__(self, u:np.ndarray, nu:np.ndarray, current:Current, *args, **kwargs) -> np.ndarray:
         """
-        u: azimuth, speed
+        u: actual azimuth and speed 
         """
         self.apply_faults() # Apply fault if it must occur
         self.thrust = self.efficiency * np.clip(self.k_pos * u[1]**2 if u[1]>=0 else -self.k_neg * u[1]**2, self.f_min, self.f_max)
