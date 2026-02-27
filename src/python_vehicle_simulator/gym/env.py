@@ -167,7 +167,7 @@ class GymNavEnv(gym.Env):
             w = np.diag(np.concatenate([
                 1 / (self.own_vessel.actuator_params.alpha_max)**2,
                 1 / (self.own_vessel.actuator_params.speed_max)**2,
-            ])) / 6.0
+            ])) / 100.0
         return float((self.own_vessel.states[12:18] @ w @ self.own_vessel.states[12:18]))
 
     def fault_diagnosis_performance(self) -> float:
