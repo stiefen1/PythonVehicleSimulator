@@ -1,4 +1,4 @@
-import gymnasium as gym, numpy as np
+import gymnasium as gym, numpy as np, numpy.typing as npt
 from typing import Dict, Optional, Tuple, List, Literal
 from python_vehicle_simulator.vehicles.vessel import IVessel
 from python_vehicle_simulator.vehicles.revolt3 import ReVolt3
@@ -28,10 +28,10 @@ class GymNavEnv(gym.Env):
     def __init__(
             self,
             own_vessel:ReVolt3,
-            target_vessels:List[IVessel],
-            obstacles:List[Obstacle],
-            wind:Wind,
-            current:Current,    
+            target_vessels:List[IVessel] = [],
+            obstacles:List[Obstacle] = [],
+            wind:Optional[Wind] = None,
+            current:Optional[Current] = None,    
             render_mode:Optional[Literal['human']] = None
     ):
         """
@@ -47,8 +47,8 @@ class GymNavEnv(gym.Env):
         self.own_vessel = own_vessel
         self.target_vessels = target_vessels
         self.obstacles = obstacles
-        self.wind = wind
-        self.current = current
+        self.wind = wind or Wind(0, 0)
+        self.current = current or Current(0, 0)
 
         self.init_action_space()
         self.init_observation_space()
@@ -140,14 +140,16 @@ class GymNavEnv(gym.Env):
 
     def reward(self) -> float:
         """
-        Compute reward based on distance to target.
+        Compute reward based on distance to target, power consumption and fault diagnosis performance (to be implemented)
         
         Returns:
             float: Reward value (higher is better)
         """
         return (
             1 -
-            (self.dist_to_target()/100)
+            (self.dist_to_target()/100) -
+            self.weighted_power_consumption() +
+            self.fault_diagnosis_performance()
         )
 
     def dist_to_target(self) -> float:
@@ -159,6 +161,19 @@ class GymNavEnv(gym.Env):
         """
         ne = np.array(self.own_vessel.eta.neyaw[0:2])
         return np.linalg.norm(ne-self.target).astype(float)
+    
+    def weighted_power_consumption(self, w: Optional[npt.NDArray] = None) -> float:
+        if w is None:
+            w = np.diag(np.concatenate([
+                1 / (self.own_vessel.actuator_params.alpha_max)**2,
+                1 / (self.own_vessel.actuator_params.speed_max)**2,
+            ])) / 6.0
+        return float((self.own_vessel.states[12:18] @ w @ self.own_vessel.states[12:18]))
+
+    def fault_diagnosis_performance(self) -> float:
+        # previous_diagnosis = self.own_vessel.diagnosis.prev
+        # actual_values = ... # Extract theta whatever it is
+        return 0
     
     def collision(self) -> bool:
         """
@@ -199,18 +214,24 @@ class GymNavEnv(gym.Env):
         uvr = np.array(self.own_vessel.nu.uvr)
         delta = self.target - ne
         rel_yaw = np.array([ssa(self.own_vessel.eta[5] + np.atan2(-delta[1], delta[0]))])
+        azimuth_angles = self.own_vessel.states[12:15]  # The outcome of a thruster depends on the azimuth angle -> it's probably needed here
+        thruster_speeds = self.own_vessel.states[15:18]
 
         # Normalize each and cast to float32
         ne_norm = self._normalize(ne, self.ne_range["min"], self.ne_range["max"]).astype(np.float32)
         uvr_norm = self._normalize(uvr, self.uvr_range["min"], self.uvr_range["max"]).astype(np.float32)
         rel_target_norm = self._normalize(delta, self.rel_target_range["min"], self.rel_target_range["max"]).astype(np.float32)
         rel_yaw_norm = self._normalize(rel_yaw, self.rel_yaw_range["min"], self.rel_yaw_range["max"]).astype(np.float32)
+        azimuth_angles_norm = self._normalize(azimuth_angles, self.azimuth_angles_range["min"], self.azimuth_angles_range["max"].astype(np.float32))
+        thruster_speeds_norm = self._normalize(thruster_speeds, self.thruster_speeds_range["min"], self.thruster_speeds_range["max"].astype(np.float32))
 
         return {
             "ne": ne_norm,
             "uvr": uvr_norm,
             "rel_target": rel_target_norm,
-            "rel_yaw": rel_yaw_norm
+            "rel_yaw": rel_yaw_norm,
+            "azimuth_angles": azimuth_angles_norm,
+            "thruster_speeds": thruster_speeds_norm
         }
 
     def init_observation_space(self) -> None:
@@ -226,7 +247,9 @@ class GymNavEnv(gym.Env):
                 "ne": gym.spaces.Box(-1.0, 1.0, shape=(2,)),            # Because we want the vessel to remain within bounds
                 "uvr": gym.spaces.Box(-1.0, 1.0, shape=(3,)),           # Surge-Sway-YawRate
                 "rel_target": gym.spaces.Box(-1.0, 1.0, shape=(2,)),    # Easier to figure out using relative pose
-                "rel_yaw": gym.spaces.Box(-1.0, 1.0, shape=(1,))
+                "rel_yaw": gym.spaces.Box(-1.0, 1.0, shape=(1,)),
+                "azimuth_angles": gym.spaces.Box(-1.0, 1.0, shape=(3,)),
+                "thruster_speeds": gym.spaces.Box(-1.0, 1.0, shape=(3,))
             }
         )
 
@@ -235,6 +258,8 @@ class GymNavEnv(gym.Env):
         self.uvr_range = {"min": np.array([-50, -50, -10]), "max": np.array([50, 50, 10])}
         self.rel_target_range = {"min":np.array([-50, -50]), "max": np.array([50, 50])}
         self.rel_yaw_range = {"min": np.array([-np.pi]), "max": np.array([np.pi])}
+        self.azimuth_angles_range = {"min": self.own_vessel.actuator_params.alpha_min, "max": self.own_vessel.actuator_params.alpha_max}
+        self.thruster_speeds_range = {"min": self.own_vessel.actuator_params.speed_min, "max": self.own_vessel.actuator_params.speed_max}
     
     def _get_info(self) -> Dict:
         """
