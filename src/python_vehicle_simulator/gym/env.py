@@ -1,23 +1,49 @@
 import gymnasium as gym, numpy as np
 from typing import Dict, Optional, Tuple, List, Literal
 from python_vehicle_simulator.vehicles.vessel import IVessel
+from python_vehicle_simulator.vehicles.revolt3 import ReVolt3
 from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.lib.weather import Wind, Current
 from python_vehicle_simulator.utils.math_fn import ssa
 import matplotlib.pyplot as plt
 
 
+"""
+IMPORTANT NOTES:
+
+- Current and Wind are not handled in the dynamics, i.e. using non-zero values won't have any effect
+- This environment is made to train the Revolt to reach a target point
+- Action repeat  = number of time a single action is applied to the system (see "step" method)
+- To adapt this environment to other tasks, you must modify the following methods:
+    - reward()
+    - init_action_space()
+    - init_observation_space()
+    - get_obs()                 ->              extract observation from the simulation
+    - map_action_to_command()
+
+"""
+
 
 class GymNavEnv(gym.Env):
     def __init__(
             self,
-            own_vessel:IVessel,
+            own_vessel:ReVolt3,
             target_vessels:List[IVessel],
             obstacles:List[Obstacle],
             wind:Wind,
             current:Current,    
-            render_mode:Literal['human', 'human3d']=None        
+            render_mode:Optional[Literal['human']] = None
     ):
+        """
+        Gymnasium navigation environment for vessel control.
+        
+        own_vessel:     Vessel to be controlled
+        target_vessels: List of other vessels in environment
+        obstacles:      List of obstacles to avoid
+        wind:           Wind disturbance model
+        current:        Current disturbance model
+        render_mode:    Visualization mode ('human' or None)
+        """
         self.own_vessel = own_vessel
         self.target_vessels = target_vessels
         self.obstacles = obstacles
@@ -27,11 +53,8 @@ class GymNavEnv(gym.Env):
         self.init_action_space()
         self.init_observation_space()
 
-        # self.min_dist = 1.0 # distance to terminate episode
         self.safety_radius = 2.5
-        # self.target_range = {'n': (-20, 20), 'e': (-20, 20)}
-
-        self.action_repeat = 10 # dt is 0.02 so this make the RL frequency 1/(10*0.02) = 1/0.2 = 5Hz
+        self.action_repeat = 10 # if dt is 0.02, this leads the RL frequency to 1/(10*0.02) = 1/0.2 = 5Hz
 
         # Rendering 
         self.render_mode = render_mode
@@ -41,30 +64,24 @@ class GymNavEnv(gym.Env):
 
         # Current step (for plot purpose)
         self._step = 0
-        self.max_steps = 500 # i.e. 100 seconds for dt=0.02 and action_repeat=10
-
-        # observation space
-        self.ne_range = {"min": np.array([-50, -50]), "max": np.array([50, 50])}
-        self.uvr_range = {"min": np.array([-50, -50, -10]), "max": np.array([50, 50, 10])}
-        self.rel_target_range = {"min":np.array([-50, -50]), "max": np.array([50, 50])}
-        self.rel_yaw_range = {"min": np.array([-np.pi]), "max": np.array([np.pi])}
+        self.max_steps = 200 # i.e. 100 seconds for dt=0.02 and action_repeat=10
 
         # Reward function
         self.delta = 0.1
 
-    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[Dict, Dict]:
-        """Start a new episode.
+    def reset(self, seed: int | None = None, options: Dict | None = None) -> Tuple[Dict, Dict]:
+        """
+        Start a new episode.
 
-        Args:
-            seed: Random seed for reproducible episodes
-            options: Additional configuration (unused in this example)
+        seed:       Random seed for reproducible episodes
+        options:    Additional configuration (unused)
 
         Returns:
-            tuple: (observation, info) for the initial state
+            Tuple: (observation, info) for the initial state
         """
         # IMPORTANT: Must call this first to seed the random number generator
         super().reset(seed=seed)
-        self.np_random, _ = gym.utils.seeding.np_random(seed)
+        self.np_random, _ = gym.utils.seeding.np_random(seed) # type: ignore
 
         # Reset own vessel position to 0
         self.own_vessel.reset()
@@ -88,13 +105,13 @@ class GymNavEnv(gym.Env):
         return observation, info
 
     def step(self, action) -> Tuple[Dict, float, bool, bool, Dict]:
-        """Execute one timestep within the environment.
+        """
+        Execute one timestep within the environment.
 
-        Args:
-            action: The action to take (0-3 for directions)
+        action:     Action to take (normalized to [-1,1])    (6,)
 
         Returns:
-            tuple: (observation, reward, terminated, truncated, info)
+            Tuple: (observation, reward, terminated, truncated, info)
         """
         self._step += 1
 
@@ -102,7 +119,7 @@ class GymNavEnv(gym.Env):
         for _ in range(self.action_repeat):
             for vessel in self.target_vessels:
                 vessel.step(self.current, self.wind, self.obstacles, [])
-            self.own_vessel.step(self.current, self.wind, self.obstacles, self.target_vessels, control_commands=self.map_action_to_command(action))
+            self.own_vessel.step(self.current, self.wind, self.obstacles, self.target_vessels, control_commands=self.map_action_to_command(action), theta=np.array(6*[1.0]))
 
         # Reward result of action
         reward = self.reward()
@@ -122,38 +139,34 @@ class GymNavEnv(gym.Env):
         return observation, reward, terminated, truncated, info
 
     def reward(self) -> float:
-        # I want to reward the vessel for being alive and terminate an episode if it gets outside of my map
-        # -> constant reward at each timestamp.
-        # -> No termination condition when close to the target
-
-        # This one worked better:
+        """
+        Compute reward based on distance to target.
+        
+        Returns:
+            float: Reward value (higher is better)
+        """
         return (
             1 -
-            (self.dist_to_target()/100) #+
-            # np.min([0, self.own_vessel.nu[0]])
+            (self.dist_to_target()/100)
         )
 
-        # (Reinforcement learning-based NMPC for tracking control of ASVs: Theory and experiments)
-        # first suggested in (NMPC based on Huber Penalty Functions to Handle Large Deviations of Quadrature States) from Gros & Diehl
-        # Consider pseudo-Huber function for better numerical stability:
-        # return (self.delta**2)*(np.sqrt(1+(self.dist_to_target()/self.delta)**2)-1)
-
-        # return np.exp(-self.dist_to_target()/100) # \in [0, 1]. equal to 1 if distance is zero, otherwise decreases ----------------> Ca ne pénalise pas assez violemment le fait de ne pas être proche, le bateau fait des courbes dans tous les sens.
-        # return np.exp(-self.dist_to_target()/10) # Plus grande pénalité, au début le bateau part en arrière et fait des courbes dans tous les sens -> pénalité pour qu'il aille vers l'avant ?
-
-        # Maybe think about a more complex cost where heading error is penalized as well
-
-        # if distance <= 10 we start rewarding, otherwise penalize. If collision, add huge penalty
-        # return 1-((self.dist_to_target()/30)**2) if not self.collision() else -10000 # np.exp(-self.dist_to_target()/30) if not self.collision() else -1000
-    
     def dist_to_target(self) -> float:
+        """
+        Calculate Euclidean distance to target position.
+        
+        Returns:
+            float: Distance to target in meters
+        """
         ne = np.array(self.own_vessel.eta.neyaw[0:2])
-        return np.linalg.norm(ne-self.target)
-
-    # def target_reached(self) -> bool:
-    #     return True if self.dist_to_target() <= self.min_dist else False
+        return np.linalg.norm(ne-self.target).astype(float)
     
     def collision(self) -> bool:
+        """
+        Check for collisions with boundaries or obstacles.
+        
+        Returns:
+            bool: True if collision detected, False otherwise
+        """
         if np.any(self.own_vessel.eta.to_numpy()[0:2] > 50) or np.any(self.own_vessel.eta.to_numpy()[0:2] < -50):
             return True
         for obs in self.obstacles:
@@ -162,11 +175,25 @@ class GymNavEnv(gym.Env):
         return False
 
     def _normalize(self, x, min_val, max_val):
-        """Normalize x from [min_val, max_val] to [-1, 1]."""
+        """
+        Normalize x from [min_val, max_val] to [-1, 1].
+        
+        x:          Value to normalize
+        min_val:    Minimum value of range
+        max_val:    Maximum value of range
+        
+        Returns:
+            Normalized value in [-1, 1]
+        """
         return 2 * (x - min_val) / (max_val - min_val) - 1
 
     def _get_obs(self) -> Dict:
-        """Convert internal state to normalized observation format."""
+        """
+        Convert internal state to normalized observation format.
+        
+        Returns:
+            Dict: Normalized observations with keys 'ne', 'uvr', 'rel_target', 'rel_yaw'
+        """
         # Get raw values
         ne = np.array([self.own_vessel.eta.n, self.own_vessel.eta.e])
         uvr = np.array(self.own_vessel.nu.uvr)
@@ -185,33 +212,15 @@ class GymNavEnv(gym.Env):
             "rel_target": rel_target_norm,
             "rel_yaw": rel_yaw_norm
         }
-    
-    def _get_info(self) -> Dict:
-        """Compute auxiliary information for debugging.
-
-        Returns:
-            dict: Info with distance between agent and target
-        """
-        return {
-
-        }
-    
-    def map_action_to_command(self, action) -> None:
-        """
-        Map the interval -1, 1 to the actuator range
-        """
-        command = np.zeros_like(action)
-        idx = 0
-        for actuator in self.own_vessel.actuators:
-            N_i = actuator.u_min.shape[0] # Number of commands expected for actuator i
-            command[idx:idx+N_i] = action[idx:idx+N_i] * (actuator.u_max - actuator.u_min) / 2  + (actuator.u_max + actuator.u_min) / 2
-            idx += N_i
-        return command
-    
-    def init_action_space(self) -> None:
-        self.action_space = gym.spaces.Box(-np.ones(shape=(len(self.own_vessel.actuators),)), np.ones(shape=(len(self.own_vessel.actuators),))) # action space is -1, +1
 
     def init_observation_space(self) -> None:
+        """
+        Initialize observation space with normalized ranges.
+        
+        Sets up Dict observation space with bounds [-1,1] for all components
+        and defines mapping ranges for normalization.
+        """
+        # Observation space is normalized to enhance learning stability
         self.observation_space = gym.spaces.Dict(
             {
                 "ne": gym.spaces.Box(-1.0, 1.0, shape=(2,)),            # Because we want the vessel to remain within bounds
@@ -221,47 +230,79 @@ class GymNavEnv(gym.Env):
             }
         )
 
+        # Used to map normalized observations to actual values (see method get_obs)
+        self.ne_range = {"min": np.array([-50, -50]), "max": np.array([50, 50])}
+        self.uvr_range = {"min": np.array([-50, -50, -10]), "max": np.array([50, 50, 10])}
+        self.rel_target_range = {"min":np.array([-50, -50]), "max": np.array([50, 50])}
+        self.rel_yaw_range = {"min": np.array([-np.pi]), "max": np.array([np.pi])}
+    
+    def _get_info(self) -> Dict:
+        """
+        Compute auxiliary information for debugging.
+
+        Returns:
+            Dict: Empty info dictionary (can be extended)
+        """
+        return {
+
+        }
+    
+    def map_action_to_command(self, action) -> None:
+        """
+        Map normalized action [-1,1] to actuator command range.
+        
+        action:     Normalized action                   (6,)
+        
+        Returns:
+            Command for vessel actuators [azimuth, speeds]
+        """
+        command = np.zeros_like(action)
+        alpha_min, alpha_max = self.own_vessel.actuator_params.alpha_min, self.own_vessel.actuator_params.alpha_max
+        thruster_speed_min, thruster_speed_max = self.own_vessel.actuator_params.speed_min, self.own_vessel.actuator_params.speed_max
+        command[0:3] = action[0:3] * (alpha_max - alpha_min) / 2 + (alpha_min + alpha_max) / 2
+        command[3:6] = action[3:6] * (thruster_speed_max - thruster_speed_min) / 2 + (thruster_speed_min + thruster_speed_max) / 2
+        return command
+
+    def init_action_space(self) -> None:
+        """
+        Initialize action space with normalized range [-1,1].
+        
+        Sets up Box action space matching vessel's control input dimensions.
+        """
+        # Observation space is normalized to enhance learning stability
+        self.action_space = gym.spaces.Box(
+            -np.ones(shape=(self.own_vessel.dynamics.nu,)), 
+            +np.ones(shape=(self.own_vessel.dynamics.nu,))
+        ) # action space is -1, +1
+
     def render(self, mode=None):
+        """
+        Render the environment for visualization.
+        
+        mode:       Render mode ('human' for matplotlib visualization)
+        
+        Creates and updates a 2D plot showing vessel position and target.
+        """
         mode = mode or self.render_mode
-        if mode not in ("human", "human3d"):
+        if mode not in ("human",):
             return
 
         if self.fig is None or self.ax is None:
             self.fig = plt.figure()
-            if mode == "human3d":
-                self.ax = self.fig.add_subplot(111, projection='3d')
-                self.vessel_plot, = self.ax.plot([], [], [], label='Vessel')
-                self.ax.set_xlim(-30, 30)
-                self.ax.set_ylim(-30, 30)
-                self.ax.set_zlim(-10, 10)
-                self.ax.set_xlabel('East')
-                self.ax.set_ylabel('North')
-                self.ax.set_zlabel('-Down')
-                self.ax.scatter3D(*np.flip(self.target), zs=0, c='red')
-            else:
-                self.ax = self.fig.add_subplot(111)
-                self.vessel_plot, = self.ax.plot([], [], label='Vessel')
-                self.ax.set_xlim(-30, 30)
-                self.ax.set_ylim(-30, 30)
-                self.ax.scatter(*np.flip(self.target), c='red')
-                self.ax.set_xlabel('East')
-                self.ax.set_ylabel('North')
+            self.ax = self.fig.add_subplot(111)
+            self.vessel_plot, = self.ax.plot([], [], label='Vessel')
+            self.ax.set_xlim(-30, 30)
+            self.ax.set_ylim(-30, 30)
+            self.ax.scatter(*np.flip(self.target), c='red')
+            self.ax.set_xlabel('East')
+            self.ax.set_ylabel('North')
                 
             self.ax.legend()
             plt.ion()
             plt.show()
 
-        # Assuming vessel position is self.own_vessel.eta.e, .n, .d
-        # x = self.own_vessel.eta.e
-        # y = self.own_vessel.eta.n
-        # z = getattr(self.own_vessel.eta, 'd', 0.0)
-        if mode == "human3d":
-            geometry = self.own_vessel.geometry_for_3D_plot
-            self.vessel_plot.set_data(*geometry[0:2])
-            self.vessel_plot.set_3d_properties(geometry[2])
-        else:
-            self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
-        self.ax.set_title(f"Step: {self._step}")
+        self.vessel_plot.set_data(*self.own_vessel.geometry_for_2D_plot)
+        self.ax.set_title(f"Step: {self._step} | Time: {self._step * self.action_repeat * self.own_vessel.dynamics.dt}")
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
     
@@ -274,27 +315,27 @@ class GymNavEnv(gym.Env):
 # )
 
 def check_environment() -> None:
+    """
+    Validate environment implementation using gymnasium checker.
+    
+    Creates test environment and runs standard validation checks
+    to ensure compatibility with RL training frameworks.
+    """
     from gymnasium.utils.env_checker import check_env
-    from python_vehicle_simulator.vehicles.otter import Otter, OtterParameters, OtterThrusterParameters
-    from python_vehicle_simulator.lib.actuator import Thruster
     from python_vehicle_simulator.lib.weather import Wind, Current
     from python_vehicle_simulator.utils.unit_conversion import DEG2RAD
+    from python_vehicle_simulator.vehicles.revolt3 import ReVolt3
+    import time
 
-    dt = 0.02
-
-    thruster_params = OtterThrusterParameters()
-    otter = Otter(
-        OtterParameters(),
-        dt,
-        actuators=[Thruster(xy=(0, 0.395), **vars(thruster_params)), Thruster(xy=(0, -0.395), **vars(thruster_params))]
-    )
+    dt = 0.1
 
     env = GymNavEnv(
-        own_vessel=otter,
+        own_vessel=ReVolt3(dt),
         target_vessels=[],
         obstacles=[],
         wind=Wind(0, 0),
-        current=Current(beta=-30.0*DEG2RAD, v=0.3)
+        current=Current(beta=-30.0*DEG2RAD, v=0.3),
+        render_mode='human'
     )
     # This will catch many common issues
     try:
@@ -302,6 +343,23 @@ def check_environment() -> None:
         print("Environment passes all checks!")
     except Exception as e:
         print(f"Environment has issues: {e}")
+
+    # Run an episode
+    obs, info = env.reset()
+    print(f"Initial observation keys: {list(obs.keys())}")
+    
+    for step in range(env.max_steps):
+        action = env.action_space.sample()  # Random action
+        obs, reward, terminated, truncated, info = env.step(action)
+        env.render()
+        
+        print(f"Step {step}: reward={reward:.3f}, distance={env.dist_to_target():.1f}m")
+        
+        if terminated or truncated:
+            print(f"Episode ended at step {step}")
+            break
+    
+    plt.show(block=True)  # Keep plot open
 
 if __name__=="__main__":
     check_environment()

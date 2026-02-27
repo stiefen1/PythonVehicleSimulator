@@ -1,5 +1,4 @@
 from abc import abstractmethod
-from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from python_vehicle_simulator.lib.guidance import IGuidance, Guidance
@@ -51,11 +50,7 @@ class IVessel(IDrawable):
         super().__init__(verbose_level=verbose_level, **kwargs)
         self.dynamics = dynamics
         self.states = np.array(states)
-        self.eta = Eta(*self.states[0:6])
-        self.nu = Nu(*self.states[6:12])
         self._states_0 = deepcopy(self.states)
-        self._eta_0 = deepcopy(self.eta)
-        self._nu_0 = deepcopy(self.nu)
         self.guidance = guidance or Guidance()
         self.navigation = navigation or Navigation(self.states.copy())
         self.control = control or Control()
@@ -112,26 +107,27 @@ class IVessel(IDrawable):
 
         ## USV Dynamics
         self.states = self.__dynamics__(control_commands, current, wind, theta=theta)
-        self.eta, self.nu = Eta(*self.states[0:6]), Nu(*self.states[6:12])
 
         return (self.states, 0, False, False, {}, False)
     
-    def reset(self, random:bool=False, seed=None, eta_min:Optional[npt.NDArray]=None, eta_max:Optional[npt.NDArray]=None, nu_min:Optional[npt.NDArray]=None, nu_max:Optional[npt.NDArray]=None):
-
+    def reset(
+            self,
+            random:bool=False,
+            seed=None,
+            x_min:Optional[npt.NDArray | Tuple]=None,
+            x_max:Optional[npt.NDArray | Tuple]=None,
+        ):
         self.guidance.reset()
         self.navigation.reset()
         self.control.reset()
 
         # Set to initialize value by default
-        self.eta = deepcopy(self._eta_0)
-        self.nu = deepcopy(self._nu_0)
+        self.states = self._states_0.copy()
 
         if random: # if random sampling is asked, eta_min, et_max, nu_min, nu_max must be specified. Otherwise keep default values
             np.random.seed(seed=seed)
-            if eta_min is not None and eta_max is not None:
-                self.eta = Eta(*np.random.uniform(eta_min, eta_max).tolist())
-            if nu_min is not None and nu_max is not None:
-                self.nu = Nu(*np.random.uniform(nu_min, nu_max).tolist())
+            if x_min is not None and x_max is not None:
+                self.states = np.random.uniform(x_min, x_max)
 
     def __plot__(self, ax, *args, verbose:int=0, **kwargs):
         """
@@ -139,27 +135,16 @@ class IVessel(IDrawable):
         y = North
         z = -depth
         """
-        if isinstance(ax, Axes3D):
-            ax.plot3D(*self.geometry_for_3D_plot, *args, **kwargs)
-        else:
-            ax.scatter(self.eta[1], self.eta[0], *args, **kwargs)
-            ax.plot(*self.geometry_for_2D_plot, *args, **kwargs)
+        ax.scatter(self.eta[1], self.eta[0], *args, **kwargs)
+        ax.plot(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
 
     def __scatter__(self, ax, *args, **kwargs):
-        if isinstance(ax, Axes3D):
-            ax.scatter3D(*self.geometry_for_3D_plot, *args, **kwargs)
-        else:
-            ax.scatter(*self.geometry_for_2D_plot, *args, **kwargs)
+        ax.scatter(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
 
     def __fill__(self, ax, *args, **kwargs):
-        if isinstance(ax, Axes3D):
-            verts = [list(zip(*self.geometry_for_3D_plot))]
-            poly = Poly3DCollection(verts, *args, **kwargs)
-            ax.add_collection3d(poly)
-        else:
-            ax.fill(*self.geometry_for_2D_plot, *args, **kwargs)
+        ax.fill(*self.geometry_for_2D_plot, *args, **kwargs)
         return ax
     
     def get_geometry_from_pose(self, eta:Eta) -> npt.NDArray:
@@ -176,10 +161,14 @@ class IVessel(IDrawable):
         return self.get_geometry_from_pose(self.eta)
     
     @property
-    def geometry_for_3D_plot(self) -> Tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
-        return self.geometry[1, :], self.geometry[0, :], -self.geometry[2, :]
+    def geometry_for_2D_plot(self) -> Tuple[npt.NDArray, npt.NDArray]:
+        return self.geometry[1, :], self.geometry[0, :]
     
     @property
-    def geometry_for_2D_plot(self) -> Tuple[npt.NDArray, npt.NDArray]:
-        return self.geometry_for_3D_plot[0:2]
+    def eta(self) -> Eta:
+        return Eta(*self.states[0:6])
+    
+    @property
+    def nu(self) -> Nu:
+        return Nu(*self.states[6:12])
     
