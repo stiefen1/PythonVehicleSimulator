@@ -36,8 +36,7 @@ class Simulator:
                 'navigation': [],
                 'diagnosis': [],
                 'guidance': [],
-                'control': [],
-                'actuators': []
+                'control': []
             }
         }
 
@@ -81,7 +80,6 @@ class Simulator:
                 'diagnosis': [],
                 'guidance': [],
                 'control': [],
-                'actuators': []
             }
         }
     
@@ -111,7 +109,7 @@ class Simulator:
         self._store_gnc_prev_data()
     
     def _store_gnc_prev_data(self):
-        """Store the 'prev' data from guidance, navigation, control, diagnosis and actuators"""
+        """Store the 'prev' data from guidance, navigation, control, diagnosis"""
         vessel = self.env.own_vessel
         
         # Store navigation prev data
@@ -129,14 +127,6 @@ class Simulator:
         # Store control prev data
         ctrl_prev = deepcopy(vessel.control.prev) if hasattr(vessel.control, 'prev') else None
         self.simulation_data['gnc_data']['control'].append(ctrl_prev)
-        
-        # Store actuator prev data
-        actuator_prev_data = []
-        for actuator in vessel.actuators:
-            act_prev = deepcopy(actuator.prev) if hasattr(actuator, 'prev') else None
-            # print("Actuator: ", act_prev)
-            actuator_prev_data.append(act_prev)
-        self.simulation_data['gnc_data']['actuators'].append(actuator_prev_data)
 
     def replay(self, speed_factor:float=1.0, skip_frames:int=None) -> None:
         """
@@ -246,15 +236,6 @@ class Simulator:
         component = path_parts[0]
         attribute_path = path_parts[1:]
         
-        # Handle actuator indexing
-        actuator_index = None
-        if component.startswith('actuators[') and component.endswith(']'):
-            try:
-                actuator_index = int(component[10:-1])
-                component = 'actuators'
-            except ValueError:
-                raise ValueError(f"Invalid actuator index in '{component}'")
-        
         # Handle index notation in attribute path (e.g., "navigation.eta[0]")
         y_index_from_path = None
         if len(attribute_path) > 0:
@@ -297,27 +278,6 @@ class Simulator:
                     extracted_data.append(current_data)
                     continue
                 
-                # Handle actuators separately (it's a list of actuator data)
-                if component == 'actuators':
-                    if isinstance(timestep_data, list) and len(timestep_data) > 0:
-                        # Check if specific actuator index was requested
-                        if actuator_index is not None:
-                            if actuator_index < len(timestep_data):
-                                current_data = timestep_data[actuator_index]
-                            else:
-                                # Requested actuator index doesn't exist for this timestep
-                                current_data = None
-                        else:
-                            # Default: use the first actuator's data
-                            current_data = timestep_data[0]
-                        
-                        if current_data is None:
-                            extracted_data.append(None)
-                            continue
-                    else:
-                        extracted_data.append(None)
-                        continue
-                
                 # Navigate through the attribute path
                 for key in attribute_path:
                     if isinstance(current_data, dict) and key in current_data:
@@ -348,7 +308,6 @@ class Simulator:
         
         Args:
             data_path: String with dot notation (e.g., "navigation.eta", "guidance.eta_des")
-                      For actuators, you can specify which actuator: "actuators[0].tau", "actuators[1].info.u_actual"
                       For vessel states, use: "vessel.eta", "vessel.nu"
             y_indices: List of indices to plot as y coordinates. If None, treats data as scalar
             x_path: String with dot notation for x coordinate (e.g., "navigation.eta[0]"). If None, uses time
@@ -376,12 +335,6 @@ class Simulator:
             
             # Plot guidance desired heading
             sim.plot_gnc_data("guidance.eta_des", y_indices=[5])
-            
-            # Plot first actuator's forces
-            sim.plot_gnc_data("actuators[0].tau", y_indices=[0, 2])
-            
-            # Plot second actuator's actual inputs
-            sim.plot_gnc_data("actuators[1].info.u_actual", y_indices=[0])
             
             # Plot surge velocity vs time
             sim.plot_gnc_data("navigation.nu", y_indices=[0])
@@ -522,15 +475,6 @@ class Simulator:
         # Improve layout
         plt.tight_layout()
         
-        # For actuator data, ensure y-axis includes 0 (important reference for forces/moments)
-        component = data_path.split('.')[0]
-        if component == 'actuators':
-            y_min, y_max = ax.get_ylim()
-            if y_min > 0:
-                ax.set_ylim(bottom=0)
-            elif y_max < 0:
-                ax.set_ylim(top=0)
-        
         # Add some styling for scientific presentation
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
@@ -617,13 +561,6 @@ class Simulator:
                 "vessel.eta[5]"                     # Heading
             ], labels=["North", "East", "Heading"])
             
-            # Compare multiple actuator forces
-            sim.plot_gnc_data_multi([
-                "actuators[0].tau[0]",
-                "actuators[1].tau[0]",
-                "actuators[2].tau[0]"
-            ], labels=["Actuator 1", "Actuator 2", "Actuator 3"])
-            
             # Mix vessel states with control data
             sim.plot_gnc_data_multi([
                 "vessel.nu[0]",                     # Actual surge velocity
@@ -641,7 +578,6 @@ class Simulator:
         # Extract data for each path using the helper method
         all_series_data = []
         all_series_labels = []
-        has_actuator_data = False
         time_data = None
         valid_indices = None
         
@@ -655,10 +591,6 @@ class Simulator:
                 else:
                     # No index specified, use path as-is (helper will handle scalar/vector appropriately)
                     data_path = path
-                
-                # Check if this is actuator data
-                if data_path.startswith('actuators'):
-                    has_actuator_data = True
                 
                 # Extract data using helper method
                 path_time_data, extracted_data, path_valid_indices, path_y_index = self._extract_data_from_path(data_path)
@@ -829,14 +761,6 @@ class Simulator:
         
         # Improve layout
         plt.tight_layout()
-        
-        # For actuator data, ensure y-axis includes 0
-        if has_actuator_data:
-            y_min, y_max = ax.get_ylim()
-            if y_min > 0:
-                ax.set_ylim(bottom=0)
-            elif y_max < 0:
-                ax.set_ylim(top=0)
         
         # Add some styling for scientific presentation
         ax.spines['top'].set_visible(False)
