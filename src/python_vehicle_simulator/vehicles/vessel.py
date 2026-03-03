@@ -38,6 +38,7 @@ class IVessel(IDrawable):
             dynamics: IDynamics,
             states: Tuple,
             *args,
+            initial_control_commands:Optional[Tuple] = None,
             guidance:Optional[IGuidance] = None,
             navigation:Optional[INavigation] = None,
             control:Optional[IControl] = None,
@@ -58,7 +59,7 @@ class IVessel(IDrawable):
         self.initial_geometry = VESSEL_GEOMETRY(loa, beam)
         self.name = name
         self.mmsi = mmsi
-        self.control_commands_prev = None
+        self.control.prev['u'] = np.array(initial_control_commands) if initial_control_commands is not None else np.array(self.dynamics.nu*[0.0]) # type:ignore
 
     @abstractmethod
     def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> np.ndarray:
@@ -92,18 +93,20 @@ class IVessel(IDrawable):
         """
         # GNC
         ## Navigation: measure environments
-        measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, **kwargs)
+        measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, control_commands=self.control.prev['u'], **kwargs)
         
         ## Fault Diagnosis
-        diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info)
+        diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info, control_commands=self.control.prev['u'])
         
         ## Guidance: Get desired states
-        states_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info)
+        states_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info, control_commands=self.control.prev['u'])
 
         # Control commands can be devised by an RL agent for instance
         if control_commands is None:
             ## Control: Generate action to track desired states
             control_commands, control_info = self.control(states_des, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info)
+        else:
+            self.control.prev['u'] = control_commands # type: ignore
 
         ## USV Dynamics
         self.states = self.__dynamics__(control_commands, current, wind, theta=theta)
