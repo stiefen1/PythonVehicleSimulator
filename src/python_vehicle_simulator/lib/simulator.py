@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from python_vehicle_simulator.lib.env import NavEnv
 from typing import Literal, Tuple, List, Union, Optional
 from copy import deepcopy
+import datetime
 
 class Simulator:
 
@@ -53,9 +54,10 @@ class Simulator:
             self._clear_simulation_data()
             self.simulation_data['obstacles'] = deepcopy(self.env.obstacles)
             self._store_current_state()
-        
+
+        t0 = datetime.datetime.now()
         for i, t in enumerate(tqdm(np.linspace(0, tf, N))):
-            obs, r, term, trunc, info, done = self.env.step(*args, **kwargs)
+            obs, r, term, trunc, info, done = self.env.step(*args, timestamp=t0 + datetime.timedelta(seconds=t), **kwargs)
             
             # Store state data for replay
             if store_data:

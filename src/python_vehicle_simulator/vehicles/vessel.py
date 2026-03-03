@@ -96,15 +96,15 @@ class IVessel(IDrawable):
         measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, control_commands=self.control.prev['u'], **kwargs)
         
         ## Fault Diagnosis
-        diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info, control_commands=self.control.prev['u'])
+        diagnosis, diagnosis_info = self.diagnosis(*args, **measurements, **navigation_info, control_commands=self.control.prev['u'], **kwargs)
         
         ## Guidance: Get desired states
-        states_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info, control_commands=self.control.prev['u'])
+        states_des, guidance_info = self.guidance(*args, **measurements, **navigation_info, **diagnosis, **diagnosis_info, control_commands=self.control.prev['u'], **kwargs)
 
         # Control commands can be devised by an RL agent for instance
         if control_commands is None:
             ## Control: Generate action to track desired states
-            control_commands, control_info = self.control(states_des, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info)
+            control_commands, control_info = self.control(states_des, *args, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info, **kwargs)
         else:
             self.control.prev['u'] = control_commands # type: ignore
 
