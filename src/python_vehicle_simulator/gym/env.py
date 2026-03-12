@@ -335,7 +335,7 @@ def check_environment() -> None:
         obstacles=[],
         wind=Wind(0, 0),
         current=Current(beta=-30.0*DEG2RAD, v=0.3),
-        render_mode='human'
+        # render_mode='human'
     )
     # This will catch many common issues
     try:

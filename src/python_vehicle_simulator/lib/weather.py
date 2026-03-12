@@ -1,7 +1,7 @@
 from math import cos, sin, pi
 from python_vehicle_simulator.utils.math_fn import ssa
-from sys import float_repr_style
 import numpy as np
+from matplotlib.axes import Axes
 
 RHO_AIR_AS_FUNC_OF_TEMP = { # From Handbook of Marine Craft Hydrodynamics and Motion Control, p.190
     -10: 1.342,
@@ -58,6 +58,39 @@ class UniformVectorField:
     
     def v(self, yaw:float) -> float:
         return self.norm * sin(self.beta - yaw)
+
+    def plot(self, ax: Axes, color: str ='blue') -> Axes:
+        # Get current axis limits to position arrow in top-left
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        
+        # Calculate axis dimensions
+        width = xlim[1] - xlim[0]
+        height = ylim[1] - ylim[0]
+        
+        # Position arrow in top-left corner (10% margin from edges)
+        arrow_x = xlim[0] + 0.1 * width
+        arrow_y = ylim[1] - 0.1 * height
+        
+        # Scale arrow to be 1/10 of axis size, maintaining direction
+        arrow_scale = 0.1 * min(width, height)
+        if self.norm > 0:
+            arrow_dx = arrow_scale * (self.v_east / self.norm)
+            arrow_dy = arrow_scale * (self.v_north / self.norm)
+        else:
+            arrow_dx = arrow_dy = 0
+        
+        # Draw arrow with fixed visual size
+        ax.annotate('', xy=(arrow_x + arrow_dx, arrow_y + arrow_dy), 
+                    xytext=(arrow_x, arrow_y),
+                    arrowprops=dict(arrowstyle='->', color=color, lw=2), label=type(self).__name__)
+        
+        # Add speed text near the arrow
+        ax.text(arrow_x + arrow_dx + 0.02 * width, arrow_y + arrow_dy + 0.02 * height, 
+                f'{type(self).__name__}: {self.norm:.1f} m/s', 
+                fontsize=10, color=color, 
+                bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8), label=type(self).__name__)
+        return ax
         
     @property
     def v_east(self) -> float:
@@ -66,6 +99,24 @@ class UniformVectorField:
     @property
     def v_north(self) -> float:
         return cos(self.beta) * self.norm
+
+    @property
+    def beta(self) -> float:
+        return self._beta
+    
+    @property
+    def norm(self) -> float:
+        return self._norm
+    
+    @beta.setter
+    def beta(self, val: float) -> None:
+        self._beta = ssa(val)
+
+    @norm.setter
+    def norm(self, val: float) -> None:
+        if val < 0: # If norm is negative, it means wind direction changes
+            self.beta = self._beta + pi
+        self._norm = abs(val)
 
 class Wind(UniformVectorField):
     def __init__(
