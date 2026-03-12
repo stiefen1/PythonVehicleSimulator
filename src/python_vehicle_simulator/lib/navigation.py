@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 # from python_vehicle_simulator.vehicles.vessel import IVessel
 from python_vehicle_simulator.utils.unit_conversion import DEG2RAD
-import numpy as np
-from typing import List, Dict, Tuple
+import numpy as np, numpy.typing as npt
+from typing import List, Dict, Tuple, Optional
 from copy import deepcopy
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from python_vehicle_simulator.utils.math_fn import Rzyx
@@ -31,11 +31,12 @@ class INavigation(IDrawable, ABC):
             states:np.ndarray,
             sensors:Dict[str, ISensor],
             *args,
+            seed: Optional[int] = None,
             **kwargs
     ):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
         self.sensors = sensors
-        self.prev = {"eta": states[0:6].copy(), "nu": states[6:12].copy(), "states": states.copy(), "current": None, "wind": None, "obstacles": None, "target_vessels": None, 'info': None}
+        self.reset(states, seed=seed)
         self.last_observation = None
         self.last_info = None
 
@@ -54,10 +55,10 @@ class INavigation(IDrawable, ABC):
             "obstacles": obstacles,
             "target_vessels": target_vessels
             }, {}
-    
+
     @abstractmethod
-    def reset(self):
-        pass
+    def reset(self, states: npt.NDArray, seed: Optional[int] = None):
+        self.prev = {"eta": states[0:6].copy(), "nu": states[6:12].copy(), "states": states.copy(), "current": None, "wind": None, "obstacles": None, "target_vessels": None, 'info': None}
 
     def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         return ax
@@ -80,8 +81,9 @@ class Navigation(INavigation):
     def __get__(self, states:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[Dict, Dict]:
         return super().__get__(states, current, wind, obstacles, target_vessels, *args, **kwargs)
     
-    def reset(self):
-        pass
+    def reset(self, states: npt.NDArray, seed: Optional[int] = None):
+        self.prev = {"eta": states[0:6].copy(), "nu": states[6:12].copy(), "states": states.copy(), "current": None, "wind": None, "obstacles": None, "target_vessels": None, 'info': None}
+
     
 class NavigationWithNoise(INavigation):
     def __init__(
@@ -145,8 +147,9 @@ class NavigationWithNoise(INavigation):
         info = {}
         return observation, info
     
-    def reset(self):
-        pass
+    def reset(self, states: npt.NDArray, seed: Optional[int] = None):
+        self.prev = {"eta": states[0:6].copy(), "nu": states[6:12].copy(), "states": states.copy(), "current": None, "wind": None, "obstacles": None, "target_vessels": None, 'info': None}
+
 
     def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         if self.last_observation is None:

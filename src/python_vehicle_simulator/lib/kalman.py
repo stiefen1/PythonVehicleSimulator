@@ -20,8 +20,9 @@ class KalmanFilter:
         self.H:np.ndarray = H # Observation matrix -> y = H@x
         self.Q:np.ndarray = Q # Process noise covariance
         self.R:np.ndarray = R # Measurement noise covariance
-        self.x:np.ndarray = x0 # state
-        self.P:np.ndarray = P0 # Error covariance
+        self.x:np.ndarray = x0.copy() # state
+        self.P0:np.ndarray = P0.copy()
+        self.P:np.ndarray = P0.copy() # Error covariance
     
     def predict(self, u:np.ndarray) -> np.ndarray:
         self.x = self.F @ self.x + self.B @ u
@@ -39,6 +40,10 @@ class KalmanFilter:
         I = np.eye(self.P.shape[0])
         self.P = (I - K @ self.H) @ self.P
         return self.x
+    
+    def reset(self, x:np.ndarray) -> None:
+        self.x = x.copy()
+        self.P = self.P0.copy()
     
 class IExtendedKalmanFilter(ABC):
     """
@@ -66,8 +71,9 @@ class IExtendedKalmanFilter(ABC):
             ):
         self.Q:np.ndarray = Q # Process noise covariance
         self.R:np.ndarray = R # Measurment noise covariance
-        self.x:np.ndarray = x0 # States
-        self.P:np.ndarray = P0 # Expected Error Covariance
+        self.x:np.ndarray = x0.copy() # States
+        self.P0:np.ndarray = P0.copy()
+        self.P:np.ndarray = P0.copy() # Expected Error Covariance
         self.dt = dt
 
     def __call__(self, u:np.ndarray, z:np.ndarray, *args, **kwargs) -> np.ndarray:
@@ -118,6 +124,10 @@ class IExtendedKalmanFilter(ABC):
         I = np.eye(self.P.shape[0])
         self.P = (I - K @ dHdx) @ self.P
         return self.x
+    
+    def reset(self, x: np.ndarray) -> None:
+        self.x = x.copy()
+        self.P = self.P0.copy()
     
 
 class EKFRevolt3(IExtendedKalmanFilter):

@@ -101,7 +101,7 @@ class RevoltThrusterParameters:
         
         self.speed_max = np.array([thruster.speed_max for thruster in self.thrusters])          # Thruster speed constraints
         self.speed_min = np.array([thruster.speed_min for thruster in self.thrusters])
-        self.alpha_min = np.array([thruster.alpha_min for thruster in self.thrusters])          # Azimuth angles constraints
+        self.alpha_min = np.array([thruster.alpha_min for thruster in self.thrusters])         # Azimuth angles constraints
         self.alpha_max = np.array([thruster.alpha_max for thruster in self.thrusters])
         
         self.xy = np.array([[-1.65, -0.15], [-1.65, 0.15], [1.15, 0.0]])                        # Azimuth thruster positions
@@ -203,10 +203,17 @@ class RevoltParameters3DOF:
         ])
 
         ## Damping Matrix
+        # self.D = np.array([
+        #     [-self.Xu, 0, 0],
+        #     [0, -self.Yv, -self.Yr],
+        #     [0, -self.Nv, -self.Nr]
+        # ])
+        # For some reasons, the numerical values provided in https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2452115/16486_FULLTEXT.pdf (p.66)
+        # does not match the given formula 
         self.D = np.array([
-            [-self.Xu, 0, 0],
-            [0, -self.Yv, -self.Yr],
-            [0, -self.Nv, -self.Nr]
+            [50.66, 0, 0],
+            [0, 601.45, 83.05],
+            [0, 83.10, 268.17]
         ])
 
 class ReVolt3Dynamics(IDynamics):
@@ -365,6 +372,11 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt, time
     revolt = ReVolt3(0.1, nu=(0.7, 0, 0), thruster_speeds=(200, 200, 200))
 
+
+    print("M: ", np.linalg.inv(revolt.vessel_params.Minv))
+    print("C: ", revolt.vessel_params.CA(np.array([0, 0, 0])) + revolt.vessel_params.CRB(np.array([0, 0, 0])))
+    print("D: ", revolt.vessel_params.D)
+
     fig, ax = plt.subplots()
     plt.ion()
     plt.show()
@@ -378,5 +390,4 @@ if __name__ == "__main__":
         fig.canvas.draw()
         fig.canvas.flush_events()
         time.sleep(0.1)
-        
         

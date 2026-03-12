@@ -25,11 +25,11 @@ class IGuidance(IDrawable, ABC):
             **kwargs
     ):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
-        self.prev = {'eta_des': None, 'nu_des': None, 'info': None}
+        self.prev = {'eta_des': None, 'nu_des': None, 'states_des': None, 'info': {}}
 
     def __call__(self, states: np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
         states_des, info = self.__get__(states, current, wind, obstacles, target_vessels, *args, **kwargs)
-        self.prev = {'eta_des': states_des[0:6], 'nu_des': states_des[6:12], 'info': info}
+        self.prev = {'eta_des': states_des[0:6], 'nu_des': states_des[6:12], 'states_des': states_des, 'info': info}
         return states_des, info
 
     @abstractmethod

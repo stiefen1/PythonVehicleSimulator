@@ -10,23 +10,26 @@ URL: www.fossen.biz/wiley
 Author:     Thor I. Fossen
 """
 
-import numpy as np
+import numpy as np, numpy.typing as npt
 from python_vehicle_simulator.utils.math_fn import ssa, Rzyx
 from python_vehicle_simulator.lib.weather import Current, Wind
 from python_vehicle_simulator.lib.obstacle import Obstacle
 from python_vehicle_simulator.visualizer.drawable import IDrawable
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 from abc import ABC, abstractmethod
 from matplotlib.axes import Axes
 
 class IControl(IDrawable, ABC):
     def __init__(
             self,
+            initial_commands: npt.NDArray,
             *args,
+            seed: Optional[int] = None,
             **kwargs
     ):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
-        self.prev = {'u': None, 'info': None}
+        self.reset(initial_commands, seed=seed)
+        
 
     def __call__(self, states_des:np.ndarray, states:np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
         u, info = self.__get__(states_des, states, current, wind, obstacles, target_vessels, *args, **kwargs)
@@ -38,8 +41,8 @@ class IControl(IDrawable, ABC):
         return np.array([]), {}
     
     @abstractmethod
-    def reset(self):
-        pass
+    def reset(self, initial_commands: npt.NDArray, seed: Optional[int] = None):
+        self.prev = {'u': initial_commands, 'info': None}
 
     def __plot__(self, ax:Axes, *args, verbose:int=0, **kwargs) -> Axes:
         return ax
@@ -61,8 +64,9 @@ class Control(IControl):
     def __get__(self, states_des: np.ndarray, states: np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
         return super().__get__(states_des, states, current, wind, obstacles, target_vessels, *args, **kwargs)
 
-    def reset(self):
-        pass
+    def reset(self, initial_commands: npt.NDArray, seed: Optional[int] = None):
+        # seed can be used to reset random number generators
+        self.prev = {'u': initial_commands, 'info': None}
 
 
 # SISO PID pole placement

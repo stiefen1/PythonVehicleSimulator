@@ -38,6 +38,7 @@ class IVessel(IDrawable):
             dynamics: IDynamics,
             states: Tuple,
             *args,
+            initial_control_commands:Optional[Tuple] = None,
             guidance:Optional[IGuidance] = None,
             navigation:Optional[INavigation] = None,
             control:Optional[IControl] = None,
@@ -51,14 +52,14 @@ class IVessel(IDrawable):
         self.dynamics = dynamics
         self.states = np.array(states)
         self._states_0 = deepcopy(self.states)
+        self._control_commands_0 = np.array(initial_control_commands) if initial_control_commands is not None else np.array(self.dynamics.nu*[0.0])
         self.guidance = guidance or Guidance()
-        self.navigation = navigation or Navigation(self.states.copy())
-        self.control = control or Control()
+        self.navigation = navigation or Navigation(self.states.copy(), *args, **kwargs)
+        self.control = control or Control(self._control_commands_0.copy(), *args, **kwargs)
         self.diagnosis = diagnosis or Diagnosis(states=self.states.copy(), params=None, dt=self.dynamics.dt)
         self.initial_geometry = VESSEL_GEOMETRY(loa, beam)
         self.name = name
         self.mmsi = mmsi
-        self.control_commands_prev = None
 
     @abstractmethod
     def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> np.ndarray:
@@ -92,18 +93,20 @@ class IVessel(IDrawable):
         """
         # GNC
         ## Navigation: measure environments
-        measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, **kwargs)
+        measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, control_commands=self.control.prev['u'], **kwargs)
         
         ## Fault Diagnosis
-        diagnosis, diagnosis_info = self.diagnosis(**measurements, **navigation_info)
+        diagnosis, diagnosis_info = self.diagnosis(*args, **measurements, **navigation_info, control_commands=self.control.prev['u'], **kwargs)
         
         ## Guidance: Get desired states
-        states_des, guidance_info = self.guidance(**measurements, **navigation_info, **diagnosis, **diagnosis_info)
+        states_des, guidance_info = self.guidance(*args, **measurements, **navigation_info, **diagnosis, **diagnosis_info, control_commands=self.control.prev['u'], **kwargs)
 
         # Control commands can be devised by an RL agent for instance
         if control_commands is None:
             ## Control: Generate action to track desired states
-            control_commands, control_info = self.control(states_des, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info)
+            control_commands, control_info = self.control(states_des, *args, **measurements, **navigation_info, **diagnosis, **diagnosis_info, **guidance_info, **kwargs)
+        else:
+            self.control.prev['u'] = control_commands # type: ignore
 
         ## USV Dynamics
         self.states = self.__dynamics__(control_commands, current, wind, theta=theta)
@@ -117,9 +120,6 @@ class IVessel(IDrawable):
             x_min:Optional[npt.NDArray | Tuple]=None,
             x_max:Optional[npt.NDArray | Tuple]=None,
         ):
-        self.guidance.reset()
-        self.navigation.reset()
-        self.control.reset()
 
         # Set to initialize value by default
         self.states = self._states_0.copy()
@@ -128,6 +128,10 @@ class IVessel(IDrawable):
             np.random.seed(seed=seed)
             if x_min is not None and x_max is not None:
                 self.states = np.random.uniform(x_min, x_max)
+
+        self.guidance.reset()
+        self.navigation.reset(self.states, seed=seed)
+        self.control.reset(self._control_commands_0.copy(), seed=seed)
 
     def __plot__(self, ax, *args, verbose:int=0, **kwargs):
         """

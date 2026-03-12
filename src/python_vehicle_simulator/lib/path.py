@@ -153,15 +153,17 @@ def test() -> None:
         ]
     )
     print("Initial Pose (N, E, psi): ", path.get_initial_pose())
-    p = (3, 3)
+    p = (4, 3)
     ax = path.plot()
-    ax.scatter(p[1], p[0], c='green')
-    ax.scatter(*path.closest_point(*p), c='red')
+    
     print(path.progression(*p))
     desired_wpts = path.get_target_wpts_from(*p, 0.2, 10, final_heading=math.pi)
     
     for wpt in desired_wpts:
         ax.scatter(wpt[1], wpt[0], c='blue')
+    ax.scatter(p[1], p[0], c='green')
+    ax.scatter(*path.closest_point(*p), c='red')
+
     print(len(desired_wpts), desired_wpts)
     plt.show()
 
