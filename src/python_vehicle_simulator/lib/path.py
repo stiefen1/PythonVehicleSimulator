@@ -29,6 +29,32 @@ class PWLPath(IDrawable):
         self.init_heading()
         self.prev_target_wpts = []
 
+        waypoints_progression = []
+        for wpt in self.waypoints:
+            wpt_prog = self.progression(*wpt)
+            waypoints_progression.append(wpt_prog)
+        self.waypoints_progression = np.array(waypoints_progression)
+
+    def get_current_waypoint(self, north: float, east: float) -> int:
+        """
+        Returns the index of the next waypoint along the path.
+        """
+        p = self.progression(north, east)
+        return self.get_next_waypoint_index(p)
+    
+    def get_next_waypoint_index(self, progression: float) -> int:
+        """
+        Returns the index of the next waypoint given a progression value.
+        """
+        # Find the first waypoint that has progression greater than the current progression
+        next_indices = np.where(self.waypoints_progression > progression)[0]
+        
+        if len(next_indices) == 0:
+            # If no waypoint is ahead, return the last waypoint index
+            return len(self.waypoints_progression) - 1
+        else:
+            return next_indices[0]
+
     def init_heading(self) -> None:
         self.heading = []
         for k in range(1, self.waypoints.shape[0]):
@@ -153,7 +179,7 @@ def test() -> None:
         ]
     )
     print("Initial Pose (N, E, psi): ", path.get_initial_pose())
-    p = (4, 3)
+    p = (-2, 1) # (4, 5.5) # (3.2, 4.5) # (0, 0) # (2, 0) # (3, 2) # (4, 3)
     ax = path.plot()
     
     print(path.progression(*p))
@@ -165,6 +191,7 @@ def test() -> None:
     ax.scatter(*path.closest_point(*p), c='red')
 
     print(len(desired_wpts), desired_wpts)
+    print("Current waypoint: ", path.get_current_waypoint(*p))
     plt.show()
 
 if __name__ == "__main__":
