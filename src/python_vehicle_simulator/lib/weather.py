@@ -1,7 +1,8 @@
 from math import cos, sin, pi
 from python_vehicle_simulator.utils.math_fn import ssa
-import numpy as np
+import numpy as np, gymnasium as gym
 from matplotlib.axes import Axes
+from typing import Optional, Dict, Tuple
 
 RHO_AIR_AS_FUNC_OF_TEMP = { # From Handbook of Marine Craft Hydrodynamics and Motion Control, p.190
     -10: 1.342,
@@ -40,10 +41,26 @@ class UniformVectorField:
             beta:float, # rad - clockwise positive w.r.t north (bearing angle) 
             norm:float, # m/s
             *args,
+            attraction_beta: float = 0,
+            amplitude_beta: float = 0,
+            attraction_norm: float = 0,
+            amplitude_norm: float = 0,
+            dt: Optional[float] = None,
+            seed: Optional[int] = None,
             **kwargs
     ):
-        self.beta = beta
-        self.norm = norm
+        self._beta_0 = beta # Considered as mean if Ornstein-Uhlenbeck process is used
+        self._norm_0 = norm
+
+        # Ornstein-Uhlenbeck parameters
+        self.ornstein_uhlenbeck_beta = attraction_beta > 0 and amplitude_beta > 0 and dt is not None
+        self.attraction_beta = attraction_beta
+        self.amplitude_beta = amplitude_beta
+        self.ornstein_uhlenbeck_norm = attraction_norm > 0 and amplitude_norm > 0 and dt is not None
+        self.attraction_norm = attraction_norm
+        self.amplitude_norm = amplitude_norm
+        self.dt = dt
+        self.reset(seed=seed)
 
     def beta_in_vessel(self, yaw:float) -> float:
         """yaw in radians"""
@@ -58,6 +75,37 @@ class UniformVectorField:
     
     def v(self, yaw:float) -> float:
         return self.norm * sin(self.beta - yaw)
+    
+    def step(self) -> Dict:
+        if self.ornstein_uhlenbeck_beta:
+            dbeta = self.attraction_beta * (self._beta_0 - self._beta) * self.dt + self.amplitude_beta * self.np_random.normal(0, 1) * self.dt # type: ignore
+            self.beta = self._beta + dbeta
+        if self.ornstein_uhlenbeck_norm:
+            dnorm = self.attraction_norm * (self._norm_0 - self._norm) * self.dt + self.amplitude_norm * self.np_random.normal(0, 1) * self.dt # type: ignore
+            self.norm = self._norm + dnorm
+        return {}
+    
+    def reset(self, seed: Optional[int] = None) -> None:
+        self.np_random, _ = gym.utils.seeding.np_random(seed) # type: ignore
+        self.beta = self._beta_0 # Actual values returned (updated using the step() method if stochastic process is used)
+        self.norm = self._norm_0
+
+    def get_arrow_coords(self, ax: Axes, offset_factor: float = 0.0) -> Tuple[float, float, float, float]:
+        """Get arrow coordinates for plotting in axis coordinates (0-1). Returns (start_x, start_y, end_x, end_y)"""
+        # Fixed position in axis coordinates (independent of data limits)
+        arrow_x = 0.1  # 10% from left edge
+        arrow_y = 0.9 - offset_factor * 0.15  # 10% from top, with offset for multiple arrows
+        
+        # Fixed arrow scale in axis coordinates
+        arrow_scale = 0.1
+        if self.norm > 0:
+            # Normalize direction vector
+            arrow_dx = arrow_scale * (self.v_east / self.norm)
+            arrow_dy = arrow_scale * (self.v_north / self.norm)
+        else:
+            arrow_dx = arrow_dy = 0
+        
+        return arrow_x, arrow_y, arrow_x + arrow_dx, arrow_y + arrow_dy
 
     def plot(self, ax: Axes, color: str ='blue') -> Axes:
         # Get current axis limits to position arrow in top-left
@@ -125,10 +173,27 @@ class Wind(UniformVectorField):
             v:float, # m/s
             *args,
             temperature: float = 10,
+            attraction_beta: float = 0,
+            amplitude_beta: float = 0,
+            attraction_norm: float = 0,
+            amplitude_norm: float = 0,
+            dt: Optional[float] = None,
+            seed: Optional[int] = None,
             **kwargs
     ):
         self.temperature = temperature
-        super().__init__(beta, v, *args, **kwargs)
+        super().__init__(
+            beta,
+            v,
+            *args,
+            attraction_beta = attraction_beta,
+            amplitude_beta = amplitude_beta,
+            attraction_norm = attraction_norm,
+            amplitude_norm = amplitude_norm,
+            dt = dt,
+            seed = seed,
+            **kwargs
+        )
 
     def get_air_density(self) -> float:
         return get_air_density(self.temperature)
@@ -139,9 +204,25 @@ class Current(UniformVectorField):
             beta:float, # clockwise positive w.r.t north (bearing angle) in radians
             v:float, # m/s
             *args,
+            attraction_beta: float = 0,
+            amplitude_beta: float = 0,
+            attraction_norm: float = 0,
+            amplitude_norm: float = 0,
+            dt: Optional[float] = None,
+            seed: Optional[int] = None,
             **kwargs
     ):
-        super().__init__(beta, v, *args, **kwargs)
+        super().__init__(
+            beta, 
+            v, 
+            *args,
+            attraction_beta = attraction_beta,
+            amplitude_beta = amplitude_beta,
+            attraction_norm = attraction_norm,
+            amplitude_norm = amplitude_norm,
+            dt = dt,
+            seed = seed,
+            **kwargs)
 
     
 if __name__ == "__main__":
@@ -168,3 +249,23 @@ if __name__ == "__main__":
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.show()
+
+
+    # vector_field = Wind(0, 10, attraction_beta=0.01, amplitude_beta=0.05, attraction_norm=0.01, amplitude_norm=0.1, dt=1)
+    vector_field = Current(0, 10, attraction_beta=0.01, amplitude_beta=0.05, attraction_norm=0.01, amplitude_norm=0.1, dt=1)
+    # vector_field = Current(0, 10) # Static vector field
+
+    fig, ax = plt.subplots()
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    ax.set_aspect('equal')
+    
+    for i in range(20):
+        ax.cla()
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        ax.set_aspect('equal')
+        ax.set_title(f'                       Step {i} (β={vector_field.beta:.2f} rad)')
+        vector_field.plot(ax)
+        plt.pause(0.01)
+        vector_field.step()
