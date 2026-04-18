@@ -22,7 +22,7 @@ from python_vehicle_simulator.lib.kalman import EKFRevolt3
 #         u, v +- 0.05 m/s
 #         r not specified, assuming it is very low according to graph. let's say r +- 0.05 deg/s as well
 Q_REVOLT = np.diag([0.3**2, 0.3**2, (0.4*np.pi/180)**2, 0.02**2, 0.02**2, 15*np.pi/180/3600])
-R_REVOLT = np.diag([1e-2, 1e-2, 0.2*np.pi/180, 5e-2, 5e-2, 5e-2])
+R_REVOLT = np.diag([1e-2, 1e-2, 0.2*np.pi/180, 5e-2, 5e-2, 5e-2]) 
 
 
 class INavigation(IDrawable, ABC):
@@ -35,7 +35,7 @@ class INavigation(IDrawable, ABC):
     ):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
         self.sensors = sensors
-        self.prev = {"eta": states[0:6].copy(), "nu": states[6:12].copy(), "states": states.copy(), "current": None, "wind": None, "obstacles": None, "target_vessels": None, 'info': None}
+        self.prev = {"eta": states[0:6].copy(), "nu": states[6:12].copy(), "states": states.copy(), "measurements": None, "current": None, "wind": None, "obstacles": None, "target_vessels": None, 'info': None}
         self.last_observation = None
         self.last_info = None
 
