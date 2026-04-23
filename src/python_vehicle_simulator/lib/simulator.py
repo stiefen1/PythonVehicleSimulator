@@ -41,7 +41,7 @@ class Simulator:
             }
         }
 
-    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, **kwargs) -> None:
+    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), **kwargs) -> None:
         """
         Run simulation from 0 to tf with sampling time self.dt
         """
@@ -55,7 +55,6 @@ class Simulator:
             self.simulation_data['obstacles'] = deepcopy(self.env.obstacles)
             self._store_current_state()
 
-        t0 = datetime.datetime.now()
         for i, t in enumerate(tqdm(np.linspace(0, tf, N))):
             obs, r, term, trunc, info, done = self.env.step(*args, timestamp=t0 + datetime.timedelta(seconds=t), **kwargs)
             
