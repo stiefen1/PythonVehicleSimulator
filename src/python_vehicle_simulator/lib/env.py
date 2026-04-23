@@ -120,6 +120,7 @@ class NavEnv:
         self.ax.set_xlabel('East')
         self.ax.set_ylabel('North')
         self.ax.set_title(f"Vessel Position (t={self.t:.1f})")
+        self.ax.set_aspect('equal')
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
