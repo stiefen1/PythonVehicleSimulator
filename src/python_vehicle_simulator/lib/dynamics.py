@@ -50,8 +50,9 @@ class IDynamics(ABC):
         u = cs.SX.sym('u', self.nu)                     # type: ignore
         theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
+        uvr_rel = cs.SX.sym('uvr_rel', 3)               # type: ignore
 
-        return cs.Function('continuous_time_dynamics', [x, u, theta, disturbance], [self.continuous_time_dynamics(x, u, theta, disturbance)])
+        return cs.Function('continuous_time_dynamics', [x, u, theta, disturbance, uvr_rel], [self.continuous_time_dynamics(x, u, theta, disturbance, uvr_rel)])
 
     def _discretize_dynamics(self, continuous_time_dynamics: cs.Function, method: DiscretizationMethod='rk4') -> cs.Function:
         """
@@ -81,12 +82,13 @@ class IDynamics(ABC):
         u = cs.SX.sym('u', self.nu)                     # type: ignore
         theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
+        uvr_rel = cs.SX.sym('uvr_rel', 3)               # type: ignore
 
         return (
-            cs.Function("A_continuous", [x, u, theta, disturbance], [cs.jacobian(self._f(x, u, theta, disturbance), x)]),
-            cs.Function("B_continuous", [x, u, theta, disturbance], [cs.jacobian(self._f(x, u, theta, disturbance), u)]),
-            cs.Function("A_discrete", [x, u, theta, disturbance], [cs.jacobian(self._fd(x, u, theta, disturbance), x)]),
-            cs.Function("B_discrete", [x, u, theta, disturbance], [cs.jacobian(self._fd(x, u, theta, disturbance), u)])
+            cs.Function("A_continuous", [x, u, theta, disturbance, uvr_rel], [cs.jacobian(self._f(x, u, theta, disturbance, uvr_rel), x)]),
+            cs.Function("B_continuous", [x, u, theta, disturbance, uvr_rel], [cs.jacobian(self._f(x, u, theta, disturbance, uvr_rel), u)]),
+            cs.Function("A_discrete", [x, u, theta, disturbance, uvr_rel], [cs.jacobian(self._fd(x, u, theta, disturbance, uvr_rel), x)]),
+            cs.Function("B_discrete", [x, u, theta, disturbance, uvr_rel], [cs.jacobian(self._fd(x, u, theta, disturbance, uvr_rel), u)])
         )
         
     def _rk4(self, continuous_time_dynamics: cs.Function) -> cs.Function:
@@ -102,15 +104,16 @@ class IDynamics(ABC):
         u = cs.SX.sym('u', self.nu)                     # type: ignore
         theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
+        uvr_rel = cs.SX.sym('uvr_rel', 3)               # type: ignore
 
         # RK4 integration
-        k1 = continuous_time_dynamics(x, u, theta, disturbance)
-        k2 = continuous_time_dynamics(x + 0.5 * self.dt * k1, u, theta, disturbance)           # type: ignore
-        k3 = continuous_time_dynamics(x + 0.5 * self.dt * k2, u, theta, disturbance)           # type: ignore
-        k4 = continuous_time_dynamics(x + self.dt * k3, u, theta, disturbance)                 # type: ignore
+        k1 = continuous_time_dynamics(x, u, theta, disturbance, uvr_rel)
+        k2 = continuous_time_dynamics(x + 0.5 * self.dt * k1, u, theta, disturbance, uvr_rel)           # type: ignore
+        k3 = continuous_time_dynamics(x + 0.5 * self.dt * k2, u, theta, disturbance, uvr_rel)           # type: ignore
+        k4 = continuous_time_dynamics(x + self.dt * k3, u, theta, disturbance, uvr_rel)                 # type: ignore
         x_next = x + (self.dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)            # type: ignore
 
-        return cs.Function('discrete_dynamics', [x, u, theta, disturbance], [x_next])
+        return cs.Function('discrete_dynamics', [x, u, theta, disturbance, uvr_rel], [x_next])
 
     def _euler(self, continuous_time_dynamics: cs.Function) -> cs.Function:
         """
@@ -125,11 +128,12 @@ class IDynamics(ABC):
         u = cs.SX.sym('u', self.nu)                     # type: ignore
         theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
+        uvr_rel = cs.SX.sym('uvr_rel', 3)               # type: ignore
         
         # Euler integration: x_next = x + dt * f(x, u, theta)
-        x_next = x + self.dt * continuous_time_dynamics(x, u, theta, disturbance)  # type: ignore
+        x_next = x + self.dt * continuous_time_dynamics(x, u, theta, disturbance, uvr_rel)  # type: ignore
         
-        return cs.Function('discrete_dynamics', [x, u, theta, disturbance], [x_next])
+        return cs.Function('discrete_dynamics', [x, u, theta, disturbance, uvr_rel], [x_next])
 
     def _init_dynamics(self) -> None:
         """
@@ -185,7 +189,7 @@ class IDynamics(ABC):
         self._rollout_mapaccum_cache[key] = step_function.mapaccum(horizon)
         return self._rollout_mapaccum_cache[key]
 
-    def A(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def A(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
         """
         Continuous-time state matrix (∂f/∂x).
         
@@ -197,9 +201,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: State matrix A (nx, nx)
         """
-        return np.array(self._A_function(x, u, theta, disturbance))
+        return np.array(self._A_function(x, u, theta, disturbance, *args))
     
-    def B(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def B(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
         """
         Continuous-time input matrix (∂f/∂u).
         
@@ -211,9 +215,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Input matrix B (nx, nu)
         """
-        return np.array(self._B_function(x, u, theta, disturbance))
+        return np.array(self._B_function(x, u, theta, disturbance, *args))
     
-    def Ad(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def Ad(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
         """
         Discrete-time state matrix (∂fd/∂x).
         
@@ -225,9 +229,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Discrete state matrix Ad (nx, nx)
         """
-        return np.array(self._Ad_function(x, u, theta, disturbance))
+        return np.array(self._Ad_function(x, u, theta, disturbance, *args))
     
-    def Bd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def Bd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
         """
         Discrete-time input matrix (∂fd/∂u).
         
@@ -239,9 +243,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Discrete input matrix Bd (nx, nu)
         """
-        return np.array(self._Bd_function(x, u, theta, disturbance))
+        return np.array(self._Bd_function(x, u, theta, disturbance, *args))
     
-    def f(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def f(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
         """
         Continuous-time dynamics function.
         
@@ -253,9 +257,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: State derivatives dx/dt (nx,)
         """
-        return np.array(self._f(x, u, theta, disturbance))
+        return np.array(self._f(x, u, theta, disturbance, *args))
     
-    def fd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def fd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
         """
         Discrete-time dynamics function.
         
@@ -267,7 +271,7 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Next states x[k+1] (nx,)
         """
-        return np.array(self._fd(x, u, theta, disturbance))
+        return np.array(self._fd(x, u, theta, disturbance, *args))
 
     def fd_batch(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
