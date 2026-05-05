@@ -69,6 +69,8 @@ class IExtendedKalmanFilter(ABC):
             *args,
             **kwargs
             ):
+        assert Q.shape[0] == Q.shape[1], f"Q must be squared but has shape {Q.shape}"
+        assert R.shape[0] == R.shape[1], f"R must be squared but has shape {R.shape}"
         self.Q:np.ndarray = Q # Process noise covariance
         self.R:np.ndarray = R # Measurment noise covariance
         self.x:np.ndarray = x0.copy() # States
