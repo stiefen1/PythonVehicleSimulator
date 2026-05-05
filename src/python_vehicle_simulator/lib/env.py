@@ -115,14 +115,6 @@ class NavEnv:
             for tv in self.target_vessels:
                 tv.plot(ax=self.ax, verbose=verbose, c='red')
 
-        try:
-            traj = self.own_vessel.guidance.traj
-            if traj is not None:
-                print("Showing path")
-                PWLPath(traj.xy, input_format='east-north').plot(ax=self.ax)
-        except:
-            pass
-
         self.ax.set_xlim([self.own_vessel.eta[1]-window_size[0]/2, self.own_vessel.eta[1]+window_size[0]/2])
         self.ax.set_ylim([self.own_vessel.eta[0]-window_size[1]/2, self.own_vessel.eta[0]+window_size[1]/2])
         self.ax.set_xlabel('East')
