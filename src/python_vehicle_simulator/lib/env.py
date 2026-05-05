@@ -77,6 +77,10 @@ class NavEnv:
         # Step own vessel
         obs, r, term, trunc, info, done = self.own_vessel.step(self.current, self.wind, self.obstacles, self.target_vessels, *args, **kwargs)
         
+        # Step environment
+        self.wind.step()
+        self.current.step()
+
         # Rendering
         # if self.skip_frames == 0 or (self.t//self.dt) % (self.skip_frames) == 0:
         #     self.render(self.render_mode, verbose=self.verbose)
@@ -89,7 +93,7 @@ class NavEnv:
         self.observations.append(obs)
         self.rewards.append(r)
         self.terminated.append(term)
-        self.truncated.append(info)
+        self.truncated.append(trunc)
         self.infos.append(info)
         self.dones.append(done)
 
