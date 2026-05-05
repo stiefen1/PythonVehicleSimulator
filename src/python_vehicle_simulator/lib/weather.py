@@ -76,6 +76,14 @@ class UniformVectorField:
     def v(self, yaw:float) -> float:
         return self.norm * sin(self.beta - yaw)
     
+    def uv0(self, yaw:float) -> Tuple[float, float]:
+        rel_angle_0 = ssa(self._beta_0 - yaw)
+        return self._norm_0 * cos(rel_angle_0), self._norm_0 * sin(rel_angle_0)
+    
+    def uv(self, yaw:float) -> Tuple[float, float]:
+        rel_angle = ssa(self.beta - yaw)
+        return self._norm_0 * cos(rel_angle), self.norm * sin(rel_angle)
+    
     def step(self) -> Dict:
         if self.ornstein_uhlenbeck_beta:
             dbeta = self.attraction_beta * (self._beta_0 - self._beta) * self.dt + self.amplitude_beta * self.np_random.normal(0, 1) * self.dt # type: ignore
