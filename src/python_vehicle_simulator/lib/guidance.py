@@ -25,7 +25,7 @@ class IGuidance(IDrawable, ABC):
             **kwargs
     ):
         IDrawable.__init__(self, *args, verbose_level=2, **kwargs)
-        self.prev = {'eta_des': None, 'nu_des': None, 'states_des': None, 'info': {}}
+        self.prev = {'eta_des': None, 'nu_des': None, 'states_des': None, 'info': {'term': False}}
 
     def __call__(self, states: np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
         states_des, info = self.__get__(states, current, wind, obstacles, target_vessels, *args, **kwargs)
@@ -34,7 +34,7 @@ class IGuidance(IDrawable, ABC):
 
     @abstractmethod
     def __get__(self, states: np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
-        return states, {}
+        return states, {'term': False}
     
     @abstractmethod
     def reset(self) :
@@ -62,7 +62,7 @@ class Guidance(IGuidance):
         super().__init__(*args, **kwargs)
 
     def __get__(self, states: np.ndarray, current:Current, wind:Wind, obstacles:List[Obstacle], target_vessels:List, *args, **kwargs) -> Tuple[np.ndarray, Dict]:
-        return np.array([0, 0, 0, 0, 0, self.desired_heading, self.desired_speed, 0, 0, 0, 0, 0], float), {}
+        return np.array([0, 0, 0, 0, 0, self.desired_heading, self.desired_speed, 0, 0, 0, 0, 0], float), {'term': False}
 
     def reset(self):
         pass

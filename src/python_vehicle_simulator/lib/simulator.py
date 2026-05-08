@@ -55,6 +55,7 @@ class Simulator:
             self.simulation_data['obstacles'] = deepcopy(self.env.obstacles)
             self._store_current_state()
 
+        term = False
         for i, t in enumerate(tqdm(np.linspace(0, tf, N))):
             obs, r, term, trunc, info, done = self.env.step(*args, timestamp=t0 + datetime.timedelta(seconds=t), **kwargs)
             
@@ -68,6 +69,12 @@ class Simulator:
                 if savefig_every is not None:
                     if i % savefig_every == 0:
                         plt.savefig(f"{1000*t:.0f}_ms.png")
+
+            if term:
+                break
+
+        if term:
+            print("Simulation terminated")
 
     def _clear_simulation_data(self):
         """Clear stored simulation data"""
