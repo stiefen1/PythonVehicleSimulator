@@ -1,7 +1,7 @@
 from python_vehicle_simulator.lib.weather import Wind, Current
 from python_vehicle_simulator.vehicles.vessel import IVessel
 from python_vehicle_simulator.lib.obstacle import Obstacle
-from typing import List, Tuple, Dict, Any, Literal
+from typing import List, Tuple, Dict, Any, Optional
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from python_vehicle_simulator.lib.path import PWLPath
@@ -16,8 +16,8 @@ class NavEnv:
             obstacles:List[Obstacle],
             dt:float,
             *args,
-            wind:Wind=None,
-            current:Current=None,
+            wind:Optional[Wind]=None,
+            current:Optional[Current]=None,
             **kwargs
     ):
         self.own_vessel = own_vessel
@@ -42,8 +42,7 @@ class NavEnv:
         self.ax = None
         self.vessel_plot = None
         
-
-    def reset(self):
+    def reset(self, seed: Optional[int] = None):
         self.timestamps:List[float] = []
         self.observations:List[Any] = []    # Observation space
         self.rewards:List[float] = []       # Reward as a result of taking an action
@@ -55,6 +54,8 @@ class NavEnv:
         self.fig = None
         self.ax = None
         self.vessel_plot = None
+        self.wind.reset(seed=seed)
+        self.current.reset(seed=seed)
 
     def step(self, *args, **kwargs) -> Tuple[List, float, bool, bool, Dict, bool]:
         """
@@ -121,15 +122,14 @@ class NavEnv:
 
         self.ax.set_xlim([self.own_vessel.eta[1]-window_size[0]/2, self.own_vessel.eta[1]+window_size[0]/2])
         self.ax.set_ylim([self.own_vessel.eta[0]-window_size[1]/2, self.own_vessel.eta[0]+window_size[1]/2])
+        self.wind.plot(self.ax)
+        self.current.plot(self.ax)
         self.ax.set_xlabel('East')
         self.ax.set_ylabel('North')
         self.ax.set_title(f"Vessel Position (t={self.t:.1f})")
         self.ax.set_aspect('equal')
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
-
-    def reset(self):
-        pass
 
     @property
     def dt(self) -> float:
