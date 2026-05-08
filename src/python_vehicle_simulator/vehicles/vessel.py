@@ -111,7 +111,7 @@ class IVessel(IDrawable):
         ## USV Dynamics
         self.states = self.__dynamics__(control_commands, current, wind, theta=theta)
 
-        return (self.states, 0, False, False, {}, False)
+        return (self.states, 0, guidance_info['term'], False, {}, False)
     
     def reset(
             self,
