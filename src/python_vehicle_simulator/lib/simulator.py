@@ -41,11 +41,11 @@ class Simulator:
             }
         }
 
-    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), **kwargs) -> None:
+    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), seed: Optional[int] = None, **kwargs) -> None:
         """
         Run simulation from 0 to tf with sampling time self.dt
         """
-        self.env.reset()
+        self.env.reset(seed=seed)
         print("Running simulation..")
         N = int(tf//self.dt) + 1
         
