@@ -41,7 +41,7 @@ class Simulator:
             }
         }
 
-    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), seed: Optional[int] = None, **kwargs) -> None:
+    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), seed: Optional[int] = None, use_tqdm: bool = True, **kwargs) -> None:
         """
         Run simulation from 0 to tf with sampling time self.dt
         """
@@ -56,7 +56,7 @@ class Simulator:
             self._store_current_state()
 
         term = False
-        for i, t in enumerate(tqdm(np.linspace(0, tf, N))):
+        for i, t in enumerate(tqdm(np.linspace(0, tf, N))) if use_tqdm else enumerate(np.linspace(0, tf, N)):
             obs, r, term, trunc, info, done = self.env.step(*args, timestamp=t0 + datetime.timedelta(seconds=t), **kwargs)
             
             # Store state data for replay
