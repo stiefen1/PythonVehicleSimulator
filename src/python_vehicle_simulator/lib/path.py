@@ -1,6 +1,7 @@
 from python_vehicle_simulator.visualizer.drawable import IDrawable
 from typing import List, Tuple, Union, Literal
 from matplotlib.axes import Axes
+from shapely.ops import substring
 import numpy as np, math, shapely
 
 class PWLPath(IDrawable):
@@ -77,7 +78,6 @@ class PWLPath(IDrawable):
         heading = np.atan2((next_point.y - point.y), (next_point.x - point.x))
 
         return point.x, point.y, heading if radians else np.rad2deg(heading)
-
 
     def closest_point(self, north:float, east:float) -> Tuple[float, float]:
         """
@@ -259,7 +259,14 @@ class PWLPath(IDrawable):
                 heading = math.atan2(p_next.y-p_n.y, p_next.x-p_n.x)
             target_wpts.append((p_n.x, p_n.y, heading))
         self.prev_target_wpts = target_wpts
-        return target_wpts        
+        return target_wpts      
+
+    def trim(self, lim: Tuple[float, float], normalized: bool = True) -> "PWLPath":
+        """
+        Trim PWLPath to only keep part between lim[0] and lim[1].
+        """
+        sub = substring(shapely.LineString(self.waypoints), lim[0], lim[1], normalized=normalized)
+        return PWLPath(list(sub.coords))
 
     def __plot__(self, ax:Axes, *args, c='black', verbose:int=0, **kwargs) -> Axes:
         ax.plot(self.waypoints[:, 1], self.waypoints[:, 0], '--', *args, c=c, **kwargs)
