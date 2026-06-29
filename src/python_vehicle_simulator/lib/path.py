@@ -267,6 +267,9 @@ class PWLPath(IDrawable):
         """
         sub = substring(shapely.LineString(self.waypoints), lim[0], lim[1], normalized=normalized)
         return PWLPath(list(sub.coords))
+    
+    def is_simple(self) -> bool:
+        return shapely.LineString(self.waypoints).is_simple
 
     def __plot__(self, ax:Axes, *args, c='black', verbose:int=0, **kwargs) -> Axes:
         ax.plot(self.waypoints[:, 1], self.waypoints[:, 0], '--', *args, c=c, **kwargs)
@@ -280,6 +283,7 @@ class PWLPath(IDrawable):
 
     def __fill__(self, ax:Axes, *args, **kwargs) -> Axes:
         return ax
+    
     
 def test() -> None:
     import matplotlib.pyplot as plt
