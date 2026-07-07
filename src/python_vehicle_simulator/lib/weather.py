@@ -143,7 +143,7 @@ class UniformVectorField:
         
         # Add speed text near the arrow
         ax.text(arrow_x + arrow_dx + 0.02 * width, arrow_y + arrow_dy + 0.02 * height, 
-                f'{type(self).__name__}: {self.norm:.1f} m/s', 
+                f'{type(self).__name__}: {self.norm:.2f} m/s', 
                 fontsize=10, color=color, 
                 bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8), label=type(self).__name__)
         return ax

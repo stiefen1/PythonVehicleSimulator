@@ -8,6 +8,8 @@ DiscretizationMethod = Literal['rk4', 'euler']
 class IDynamics(ABC):
     _f: cs.Function  # Continuous-time dynamics
     _fd: cs.Function # Discrete-time dynamics
+    _fd_batch_cache: dict[int, cs.Function]
+    _rollout_mapaccum_cache: dict[Tuple[int, int], cs.Function]
 
     def __init__(
             self,
@@ -140,6 +142,48 @@ class IDynamics(ABC):
         self._f = self._get_continuous_time_dynamics()
         self._fd = self._discretize_dynamics(self._f)
         self._A_function, self._B_function, self._Ad_function, self._Bd_function = self._get_linearized_models()
+        self._fd_batch_cache = {}
+        self._rollout_mapaccum_cache = {}
+
+    def _get_fd_batch_function(self, batch_size: int) -> cs.Function:
+        """
+        Returns a cached CasADi mapped discrete-time dynamics function.
+        """
+        if batch_size not in self._fd_batch_cache:
+            self._fd_batch_cache[batch_size] = self._fd.map(batch_size)
+        return self._fd_batch_cache[batch_size]
+
+    def _get_rollout_mapaccum_function(self, batch_size: int, horizon: int) -> cs.Function:
+        """
+        Returns a cached CasADi mapaccum rollout function for a fixed batch size and horizon.
+        """
+        key = (batch_size, horizon)
+        if key in self._rollout_mapaccum_cache:
+            return self._rollout_mapaccum_cache[key]
+
+        fd_batch_function = self._get_fd_batch_function(batch_size)
+        x_dim = self.nx * batch_size
+        w_dim = (self.nu + self.nt + self.nd) * batch_size
+
+        xk_flat = cs.SX.sym('xk_flat', x_dim)  # type: ignore
+        wk_flat = cs.SX.sym('wk_flat', w_dim)  # type: ignore
+
+        offset_u = self.nu * batch_size
+        offset_t = offset_u + self.nt * batch_size
+        u_flat = wk_flat[0:offset_u]
+        theta_flat = wk_flat[offset_u:offset_t]
+        disturbance_flat = wk_flat[offset_t:]
+
+        xk = cs.reshape(xk_flat, self.nx, batch_size)
+        uk = cs.reshape(u_flat, self.nu, batch_size)
+        thetak = cs.reshape(theta_flat, self.nt, batch_size)
+        disturbancek = cs.reshape(disturbance_flat, self.nd, batch_size)
+
+        xk_next = fd_batch_function(xk, uk, thetak, disturbancek)
+        step_function = cs.Function('rollout_step', [xk_flat, wk_flat], [cs.reshape(xk_next, x_dim, 1)])
+
+        self._rollout_mapaccum_cache[key] = step_function.mapaccum(horizon)
+        return self._rollout_mapaccum_cache[key]
 
     def A(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
@@ -224,6 +268,127 @@ class IDynamics(ABC):
             npt.NDArray: Next states x[k+1] (nx,)
         """
         return np.array(self._fd(x, u, theta, disturbance))
+
+    def fd_batch(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+        """
+        Batched discrete-time dynamics with public shape (N, *).
+
+        x:              batch of current states        (N, nx)
+        u:              batch of control commands      (N, nu)
+        theta:          batch of parameters            (N, nt)
+        disturbance:    batch of disturbances          (N, nd)
+
+        Returns:
+            npt.NDArray: Batch of next states          (N, nx)
+        """
+        x = np.asarray(x)
+        u = np.asarray(u)
+        theta = np.asarray(theta)
+        disturbance = np.asarray(disturbance)
+
+        assert x.ndim == 2 and x.shape[1] == self.nx, f"x must have shape (N, {self.nx})"
+        assert u.ndim == 2 and u.shape[1] == self.nu, f"u must have shape (N, {self.nu})"
+        assert theta.ndim == 2 and theta.shape[1] == self.nt, f"theta must have shape (N, {self.nt})"
+        assert disturbance.ndim == 2 and disturbance.shape[1] == self.nd, f"disturbance must have shape (N, {self.nd})"
+
+        N = x.shape[0]
+        assert N > 0, "batch size N must be > 0"
+        assert u.shape[0] == N and theta.shape[0] == N and disturbance.shape[0] == N, "all inputs must share the same batch size N"
+
+        fd_batch_function = self._get_fd_batch_function(N)
+
+        # CasADi mapped functions operate on column-wise batches: (dim, N)
+        x_next = np.array(fd_batch_function(x.T, u.T, theta.T, disturbance.T))
+        return x_next.T
+
+    def _rollout_batch_loop_fast(self, x0: npt.NDArray, U: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+        """
+        Fast rollout path using a Python time loop but minimizing per-step overhead.
+        """
+        N = x0.shape[0]
+        T = U.shape[2]
+
+        fd_batch_function = self._get_fd_batch_function(N)
+
+        # Convert once to CasADi column-wise batch layout: (dim, N)
+        xk = x0.T
+        U_col = np.transpose(U, (1, 0, 2))
+        theta_col = theta.T
+        disturbance_col = disturbance.T
+
+        X_col = np.empty((self.nx, N, T + 1), dtype=x0.dtype)
+        X_col[:, :, 0] = xk
+
+        for k in range(T):
+            xk = np.array(fd_batch_function(xk, U_col[:, :, k], theta_col, disturbance_col))
+            X_col[:, :, k + 1] = xk
+
+        return np.transpose(X_col, (1, 0, 2))
+
+    def _rollout_batch_mapaccum_fast(self, x0: npt.NDArray, U: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+        """
+        Fast rollout path using CasADi mapaccum over the horizon.
+        """
+        N = x0.shape[0]
+        T = U.shape[2]
+
+        rollout_function = self._get_rollout_mapaccum_function(N, T)
+
+        # Build horizon inputs wk = [u_k, theta, disturbance] for each k.
+        # CasADi reshape is column-major, so we must pack using Fortran order.
+        U_col = np.transpose(U, (1, 0, 2)).reshape(self.nu * N, T, order='F')
+
+        theta_col = np.tile(theta.T.reshape(self.nt * N, 1, order='F'), (1, T))
+        disturbance_col = np.tile(disturbance.T.reshape(self.nd * N, 1, order='F'), (1, T))
+        W = np.vstack((U_col, theta_col, disturbance_col))
+
+        x0_flat = x0.T.reshape(self.nx * N, 1, order='F')
+        Xk = np.array(rollout_function(x0_flat, W))
+
+        # mapaccum returns x1..xT. Prepend x0 for a full (T+1) trajectory.
+        X_col = np.empty((self.nx, N, T + 1), dtype=x0.dtype)
+        X_col[:, :, 0] = x0.T
+        X_col[:, :, 1:] = Xk.reshape(self.nx, N, T, order='F')
+        return np.transpose(X_col, (1, 0, 2))
+
+    def rollout_batch(
+            self,
+            x0: npt.NDArray,
+            U: npt.NDArray,
+            theta: npt.NDArray,
+            disturbance: npt.NDArray,
+            method: Literal['loop', 'mapaccum'] = 'loop'
+    ) -> npt.NDArray:
+        """
+        Batched rollout with public shape (N, *, T).
+
+        x0:             initial states               (N, nx)
+        U:              control sequence             (N, nu, T)
+        theta:          parameters                   (N, nt)
+        disturbance:    disturbances                 (N, nd)
+
+        Returns:
+            npt.NDArray: state trajectory           (N, nx, T+1)
+        """
+        x0 = np.asarray(x0)
+        U = np.asarray(U)
+        theta = np.asarray(theta)
+        disturbance = np.asarray(disturbance)
+
+        assert x0.ndim == 2 and x0.shape[1] == self.nx, f"x0 must have shape (N, {self.nx})"
+        assert U.ndim == 3 and U.shape[1] == self.nu, f"U must have shape (N, {self.nu}, T)"
+        assert theta.ndim == 2 and theta.shape[1] == self.nt, f"theta must have shape (N, {self.nt})"
+        assert disturbance.ndim == 2 and disturbance.shape[1] == self.nd, f"disturbance must have shape (N, {self.nd})"
+
+        N = x0.shape[0]
+        T = U.shape[2]
+        assert N > 0, "batch size N must be > 0"
+        assert U.shape[0] == N and theta.shape[0] == N and disturbance.shape[0] == N, "all inputs must share the same batch size N"
+        assert method in get_args(Literal['loop', 'mapaccum']), "method must be 'loop' or 'mapaccum'"
+
+        if method == 'mapaccum':
+            return self._rollout_batch_mapaccum_fast(x0, U, theta, disturbance)
+        return self._rollout_batch_loop_fast(x0, U, theta, disturbance)
 
     
 if __name__ == "__main__":

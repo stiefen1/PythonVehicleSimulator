@@ -176,3 +176,13 @@ class IVessel(IDrawable):
     def nu(self) -> Nu:
         return Nu(*self.states[6:12])
     
+    @eta.setter
+    def eta(self, val: Eta) -> None:
+        assert isinstance(val, Eta), f"cannot assign type {type(val)} to eta"
+        self._eta = deepcopy(val)
+    
+    @nu.setter
+    def nu(self, val: Nu) -> None:
+        assert isinstance(val, Nu), f"cannot assign type {type(val)} to nu"
+        self._nu = deepcopy(val)
+    

@@ -90,7 +90,7 @@ class PWLPath(IDrawable):
         return float(closest_point.y), float(closest_point.x)
     
     @staticmethod
-    def sample(d_tot:float, max_turn_deg:float, seg_len_range:Tuple[float, float], start:Tuple[float, float]=(0.0, 0.0), initial_angle:float=0.0, N:int=1, seed=None) -> Union["PWLPath", List["PWLPath"]]:
+    def sample(d_tot:float, max_turn_deg:float, seg_len_range:Tuple[float, float], start:Tuple[float, float]=(0.0, 0.0), initial_angle:float=0.0, N:int=1, seed=None, simple:bool=True, max_iter:int=1000) -> Union["PWLPath", List["PWLPath"]]:
         """
         Returns a single (N=1) or list (N>1) of randomly generated piece-wise linear path, starting from start and oriented with initial_angle
 
@@ -101,27 +101,36 @@ class PWLPath(IDrawable):
         Created for use in gymnasium environments.
         """
         np.random.seed(seed=seed)
-        start = np.array(start)
+        start_np = np.array(start)
         paths = []
+        assert N > 0, f"N must be > 0, got N={N}"
+        assert max_iter > 0, f"max_iter must be > 0, got max_iter={max_iter}"
+        
         for _ in range(N):
-            distance = 0
-            angle = initial_angle*np.pi/180
-            prev_wpt = start.copy()
-            wpts = [tuple(start.tolist())]
-            while distance < d_tot:
-                length = float(np.random.uniform(*seg_len_range))
+            wpts = None
+            for _ in range(max_iter):
+                distance = 0
+                angle = initial_angle*np.pi/180
+                prev_wpt = start_np.copy()
+                wpts = [tuple(start_np.tolist())]
+                while distance < d_tot:
+                    length = float(np.random.uniform(*seg_len_range))
 
-                # Make the total distance constant to compare Time of Arrival
-                if distance + length > d_tot:
-                    length = d_tot - distance
+                    # Make the total distance constant to compare Time of Arrival
+                    if distance + length > d_tot:
+                        length = d_tot - distance
 
-                wpt = prev_wpt + length * np.array([np.cos(angle), np.sin(angle)])
+                    wpt = prev_wpt + length * np.array([np.cos(angle), np.sin(angle)])
 
-                wpts.append(tuple(wpt.tolist()))
-                distance += length
-                angle += float(np.pi*np.random.uniform(-max_turn_deg, max_turn_deg)/180)
-                prev_wpt = wpt.copy()
+                    wpts.append(tuple(wpt.tolist()))
+                    distance += length
+                    angle += float(np.pi*np.random.uniform(-max_turn_deg, max_turn_deg)/180)
+                    prev_wpt = wpt.copy()
 
+                if not(simple) or shapely.LineString(wpts).is_simple:
+                    break
+
+            assert wpts is not None, f"wpts is None."
             paths.append(PWLPath(wpts))
         return paths if N>1 else paths[0]
     

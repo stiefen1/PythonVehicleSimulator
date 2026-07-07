@@ -1,7 +1,8 @@
 import numpy as np
-from typing import Callable
+from typing import Optional, Any
 from abc import ABC, abstractmethod
 
+from python_vehicle_simulator.lib.weather import Wind, Current
 
 class KalmanFilter:
     """
@@ -58,6 +59,7 @@ class IExtendedKalmanFilter(ABC):
     y   = h(x) + w     # w is the measurement noise
 
     """
+    vessel_params: Optional[Any] = None
 
     def __init__(
             self,
@@ -78,8 +80,8 @@ class IExtendedKalmanFilter(ABC):
         self.P:np.ndarray = P0.copy() # Expected Error Covariance
         self.dt = dt
 
-    def __call__(self, u:np.ndarray, z:np.ndarray, *args, **kwargs) -> np.ndarray:
-        self.predict(u)
+    def __call__(self, u:np.ndarray, z:np.ndarray, wind:Wind, current:Current, *args, theta:Optional[np.ndarray]=None, **kwargs) -> np.ndarray:
+        self.predict(u, wind, current, theta=theta)
         return self.update(z)
 
     @abstractmethod
@@ -108,10 +110,41 @@ class IExtendedKalmanFilter(ABC):
         """
         return np.eye(x.shape[0])
     
-    def predict(self, u:np.ndarray) -> np.ndarray:
-        dFdx = self.dfdx(self.x, u)
+    def predict(self, u:np.ndarray, wind:Wind, current:Current, theta:Optional[np.ndarray]=None) -> np.ndarray:
+        if self.vessel_params is not None:    
+            # Wind perturbations
+            uw = wind.u(self.x[5])
+            vw = wind.v(self.x[5])
+
+            u_rw = uw - self.x[6]
+            v_rw = vw - self.x[7]
+
+            gamma_w = wind.gamma_w(self.x[5])
+            wind_rw2 = u_rw**2 + v_rw**2
+            c_x = -self.vessel_params.cx * np.cos(gamma_w)
+            c_y = self.vessel_params.cy * np.sin(gamma_w)
+            c_n = self.vessel_params.cn * np.sin(2 * gamma_w)
+
+            tau_coeff = 0.5 * wind.get_air_density() * wind_rw2
+            tau_w = np.array([
+                tau_coeff * c_x * self.vessel_params.proj_area_f,
+                tau_coeff * c_y * self.vessel_params.proj_area_l,
+                tau_coeff * c_n * self.vessel_params.proj_area_l * self.vessel_params.loa
+            ]) 
+
+            # Current perturbations
+            uvr = np.take(self.x, [6, 7, 11])
+            v_c = np.array([current.u(self.x[5]), current.v(self.x[5]), 0]) # current speed in ship frame
+            tau_c_coriolis = self.vessel_params.CA(uvr) @ uvr - self.vessel_params.CA(uvr - v_c) @ (uvr - v_c) # cancel CA(nu) @ nu and add CA(nu_r) @ nu_r
+            tau_c_damping = self.vessel_params.D @ v_c
+            tau_c = tau_c_coriolis + tau_c_damping
+            disturbance = tau_c + tau_w
+        else:
+            disturbance = np.array(3*[0.0])
+            
+        dFdx = self.dfdx(self.x, u, theta=theta, disturbance=disturbance)
         self.P = dFdx @ self.P @ dFdx.T + self.Q
-        self.x = self.f(self.x, u)
+        self.x = self.f(self.x, u, theta=theta, disturbance=disturbance)
         return self.x
     
     def update(self, z:np.ndarray) -> np.ndarray:
