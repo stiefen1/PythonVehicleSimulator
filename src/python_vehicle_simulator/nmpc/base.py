@@ -15,7 +15,7 @@ DEFAULT_IPOPT_SOLVER_OPTS = {
     "print_time": False,
     "record_time": True,
     "ipopt.print_level": 0,
-    "ipopt.max_iter": 200,
+    "ipopt.max_iter": 20,
     "ipopt.tol": 1e-6,
     "ipopt.acceptable_tol": 1e-4,
     "ipopt.mu_init": 1e-3,
