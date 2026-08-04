@@ -83,7 +83,6 @@ class RevoltThrusterParameters:
     alpha_min: npt.NDArray = field(init=False)                   # Max (positive) propeller speed
     alpha_max: npt.NDArray = field(init=False)                   # Min (negative) propeller speed
     xy: npt.NDArray = field(init=False)                          # azimuth, azimuth, thruster from https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2452115/16486_FULLTEXT.pdf (p.56)
-    time_constant: npt.NDArray = field(init=False)
     geometries: List = field(init=False)
 
     def __post_init__(self):
@@ -335,6 +334,8 @@ class ReVolt3(IVessel):
         mmsi:           Maritime Mobile Service Identity
         verbose_level:  Verbosity level for logging
         """
+        self.dp_mode = dp_mode
+
         super().__init__(
             self.vessel_params.loa,
             self.vessel_params.beam,
@@ -348,7 +349,6 @@ class ReVolt3(IVessel):
             mmsi=mmsi,
             verbose_level=verbose_level,
         )
-        self.dp_mode = dp_mode
     
     def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> np.ndarray:
         """
@@ -441,6 +441,10 @@ class ReVolt3(IVessel):
             envelope_in_ned_frame = Rzyx(*self.eta.to_numpy()[3:6].tolist())[0:2, 0:2] @ envelope + self.eta.to_numpy()[0:2, None]
             ax.plot(envelope_in_ned_frame[1, :], envelope_in_ned_frame[0, :], *args, **kwargs)
         return ax
+
+    @property
+    def n_active_thrusters(self) -> int:
+        return 3 if self.dp_mode else 2
         
 
 if __name__ == "__main__":

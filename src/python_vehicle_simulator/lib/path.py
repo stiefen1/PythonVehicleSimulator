@@ -90,7 +90,7 @@ class PWLPath(IDrawable):
         return float(closest_point.y), float(closest_point.x)
     
     @staticmethod
-    def sample(d_tot:float, max_turn_deg:float, seg_len_range:Tuple[float, float], start:Tuple[float, float]=(0.0, 0.0), initial_angle:float=0.0, N:int=1, seed=None, simple:bool=True, max_iter:int=1000) -> Union["PWLPath", List["PWLPath"]]:
+    def sample(d_tot:float, max_turn_deg:float, seg_len_range:Tuple[float, float], start:Tuple[float, float]=(0.0, 0.0), initial_angle:float=0.0, N:int=1, seed=None, simple:bool=True, max_iter:int=1000, **kwargs) -> Union["PWLPath", List["PWLPath"]]:
         """
         Returns a single (N=1) or list (N>1) of randomly generated piece-wise linear path, starting from start and oriented with initial_angle
 
@@ -276,6 +276,12 @@ class PWLPath(IDrawable):
         """
         sub = substring(shapely.LineString(self.waypoints), lim[0], lim[1], normalized=normalized)
         return PWLPath(list(sub.coords))
+
+    def as_linestring(self) -> shapely.LineString:
+        return shapely.LineString(self.waypoints)
+    
+    def is_simple(self) -> bool:
+        return self.as_linestring().is_simple
 
     def __plot__(self, ax:Axes, *args, c='black', verbose:int=0, **kwargs) -> Axes:
         ax.plot(self.waypoints[:, 1], self.waypoints[:, 0], '--', *args, c=c, **kwargs)
