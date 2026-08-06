@@ -153,7 +153,7 @@ class IExtendedKalmanFilter(ABC):
         """
         dHdx = self.dhdx(self.x)
         S = dHdx @ self.P @ dHdx.T + self.R # Residual covariance -> Expected combined uncertainty of prediction & measurement
-        K = self.P @ dHdx.T @ np.linalg.inv(S) # Kalman Gain -> balance factor for blending prediction and measurements
+        K = self.P @ dHdx.T @ np.linalg.pinv(S) # Kalman Gain -> balance factor for blending prediction and measurements
         y = z - self.h(self.x) # Residuals between measurement and measurement model
         self.x = self.x + K @ y # Update state estimate through innovation
         I = np.eye(self.P.shape[0])
