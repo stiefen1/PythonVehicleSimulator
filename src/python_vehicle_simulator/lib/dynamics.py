@@ -70,7 +70,7 @@ class IDynamics(ABC):
         discretization_method = getattr(self, '_' + method)
         return discretization_method(continuous_time_dynamics)
     
-    def _get_linearized_models(self) -> Tuple[cs.Function, cs.Function, cs.Function, cs.Function]:
+    def _get_linearized_models(self) -> Tuple[cs.Function, cs.Function, cs.Function, cs.Function, cs.Function, cs.Function]:
         """
         Creates linearized models (Jacobians) for continuous and discrete dynamics.
         
@@ -85,8 +85,10 @@ class IDynamics(ABC):
         return (
             cs.Function("A_continuous", [x, u, theta, disturbance], [cs.jacobian(self._f(x, u, theta, disturbance), x)]),
             cs.Function("B_continuous", [x, u, theta, disturbance], [cs.jacobian(self._f(x, u, theta, disturbance), u)]),
+            cs.Function("T_continuous", [x, u, theta, disturbance], [cs.jacobian(self._f(x, u, theta, disturbance), theta)]),
             cs.Function("A_discrete", [x, u, theta, disturbance], [cs.jacobian(self._fd(x, u, theta, disturbance), x)]),
-            cs.Function("B_discrete", [x, u, theta, disturbance], [cs.jacobian(self._fd(x, u, theta, disturbance), u)])
+            cs.Function("B_discrete", [x, u, theta, disturbance], [cs.jacobian(self._fd(x, u, theta, disturbance), u)]),
+            cs.Function("T_discrete", [x, u, theta, disturbance], [cs.jacobian(self._fd(x, u, theta, disturbance), theta)]),
         )
         
     def _rk4(self, continuous_time_dynamics: cs.Function) -> cs.Function:
@@ -141,7 +143,7 @@ class IDynamics(ABC):
         """
         self._f = self._get_continuous_time_dynamics()
         self._fd = self._discretize_dynamics(self._f)
-        self._A_function, self._B_function, self._Ad_function, self._Bd_function = self._get_linearized_models()
+        self._A_function, self._B_function, self._T_function, self._Ad_function, self._Bd_function, self._Td_function = self._get_linearized_models()
         self._fd_batch_cache = {}
         self._rollout_mapaccum_cache = {}
 
@@ -213,6 +215,20 @@ class IDynamics(ABC):
         """
         return np.array(self._B_function(x, u, theta, disturbance))
     
+    def T(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+        """
+        Continuous-time parameters matrix (∂f/∂theta).
+        
+        x:              current states              (nx,)
+        u:              control commands            (nu,)  
+        theta:          parameters                  (nt,)
+        disturbance:    disturbance (e.g. wind)     (nd,)
+        
+        Returns:
+            npt.NDArray: parameters matrix T (nx, nt)
+        """
+        return np.array(self._T_function(x, u, theta, disturbance))
+    
     def Ad(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
         Discrete-time state matrix (∂fd/∂x).
@@ -240,6 +256,20 @@ class IDynamics(ABC):
             npt.NDArray: Discrete input matrix Bd (nx, nu)
         """
         return np.array(self._Bd_function(x, u, theta, disturbance))
+    
+    def Td(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+        """
+        Discrete-time parameters matrix (∂fd/∂theta).
+        
+        x:              current states              (nx,)
+        u:              control commands            (nu,)  
+        theta:          parameters                  (nt,)
+        disturbance:    disturbance (e.g. wind)     (nd,)
+        
+        Returns:
+            npt.NDArray: Discrete parameters matrix Td (nx, nt)
+        """
+        return np.array(self._Td_function(x, u, theta, disturbance))
     
     def f(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
         """
