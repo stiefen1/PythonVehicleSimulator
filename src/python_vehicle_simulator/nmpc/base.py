@@ -15,7 +15,7 @@ DEFAULT_IPOPT_SOLVER_OPTS = {
     "print_time": False,
     "record_time": True,
     "ipopt.print_level": 0,
-    "ipopt.max_iter": 200,
+    "ipopt.max_iter": 20,
     "ipopt.tol": 1e-6,
     "ipopt.acceptable_tol": 1e-4,
     "ipopt.mu_init": 1e-3,
@@ -210,7 +210,10 @@ class NMPCBase(IControl):
         else:
             disturbance = np.asarray(kwargs.pop("disturbance", np.zeros(self.ndisturbance)), dtype=float).reshape(-1)
 
-        theta = np.asarray(kwargs.pop("theta", np.ones(self.ntheta)), dtype=float).reshape(-1)
+        if "diagnosis_theta" in kwargs.keys():
+            theta = np.asarray(kwargs.pop("diagnosis_theta", np.ones(self.ntheta)), dtype=float).reshape(-1)
+        else:
+            theta = np.asarray(kwargs.pop("theta", np.ones(self.ntheta)), dtype=float).reshape(-1)
         if theta.shape[0] != self.ntheta:
             raise ValueError(f"theta must have size {self.ntheta}")
         if disturbance.shape[0] != self.ndisturbance:
