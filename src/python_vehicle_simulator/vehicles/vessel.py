@@ -96,7 +96,7 @@ class IVessel(IDrawable):
         measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, control_commands=self.control.prev['u'], **kwargs)
         
         ## Fault Diagnosis
-        diagnosis, diagnosis_info = self.diagnosis(*args, **measurements, **navigation_info, control_commands=self.control.prev['u'], **kwargs)
+        diagnosis, diagnosis_info = self.diagnosis(*args, **measurements, **navigation_info, control_commands=self.control.prev['u'], prev_navigation=self.navigation.prev, **kwargs)
         
         ## Guidance: Get desired states
         states_des, guidance_info = self.guidance(*args, **measurements, **navigation_info, **diagnosis, **diagnosis_info, control_commands=self.control.prev['u'], **kwargs)
