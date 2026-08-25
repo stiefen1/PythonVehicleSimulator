@@ -78,6 +78,7 @@ class IExtendedKalmanFilter(ABC):
         self.x:np.ndarray = x0.copy() # States
         self.P0:np.ndarray = P0.copy()
         self.P:np.ndarray = P0.copy() # Expected Error Covariance
+        self.S:np.ndarray = R.copy() # Just for initialization
         self.dt = dt
 
     def __call__(self, u:np.ndarray, z:np.ndarray, wind:Wind, current:Current, *args, theta:Optional[np.ndarray]=None, **kwargs) -> np.ndarray:
@@ -152,8 +153,8 @@ class IExtendedKalmanFilter(ABC):
         Returns updated state estimate based on measurement z
         """
         dHdx = self.dhdx(self.x)
-        S = dHdx @ self.P @ dHdx.T + self.R # Residual covariance -> Expected combined uncertainty of prediction & measurement
-        K = self.P @ dHdx.T @ np.linalg.pinv(S) # Kalman Gain -> balance factor for blending prediction and measurements
+        self.S = dHdx @ self.P @ dHdx.T + self.R # Residual covariance -> Expected combined uncertainty of prediction & measurement
+        K = self.P @ dHdx.T @ np.linalg.pinv(self.S) # Kalman Gain -> balance factor for blending prediction and measurements
         y = z - self.h(self.x) # Residuals between measurement and measurement model
         self.x = self.x + K @ y # Update state estimate through innovation
         I = np.eye(self.P.shape[0])
