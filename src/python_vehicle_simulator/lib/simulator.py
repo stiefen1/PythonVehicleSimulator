@@ -41,9 +41,17 @@ class Simulator:
             }
         }
 
-    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), seed: Optional[int] = None, use_tqdm: bool = True, **kwargs) -> None:
+    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), seed: Optional[int] = None, use_tqdm: bool = True, kwargs_from_t: dict = {}, **kwargs) -> None:
         """
         Run simulation from 0 to tf with sampling time self.dt
+
+        kwargs_from_t: {
+            "kwargs_1": {
+                "t": 10
+                "<=t": val_prev,
+                ">t": val_after
+            }
+        }
         """
         self.env.reset(seed=seed)
         print("Running simulation..")
@@ -57,7 +65,14 @@ class Simulator:
 
         term = False
         for i, t in enumerate(tqdm(np.linspace(0, tf, N))) if use_tqdm else enumerate(np.linspace(0, tf, N)):
-            obs, r, term, trunc, info, done = self.env.step(*args, timestamp=t0 + datetime.timedelta(seconds=t), **kwargs)
+            additional_kwargs = {} # time-dependent arguments
+            for key, val in kwargs_from_t.items():
+                if t <= val["t"]:
+                    additional_kwargs = additional_kwargs | {key: val["<=t"]}
+                else:
+                    additional_kwargs = additional_kwargs | {key: val[">t"]}
+
+            obs, r, term, trunc, info, done = self.env.step(*args, timestamp=t0 + datetime.timedelta(seconds=t), **additional_kwargs, **kwargs)
             
             # Store state data for replay
             if store_data:
