@@ -148,7 +148,7 @@ class RevoltParameters3DOF:
     R66: float = 0.26 * loa
 
     ## Time constants
-    T_yaw: float = 3.0                                  # Time constant in yaw (s)
+    T_yaw: float = 3.0                                  # Time constant in yaw (s) NOT USED
 
     ## Mass & Payload
     m: float = 157.0                                    # Mass (kg) from https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2452115/16486_FULLTEXT.pdf (p.63)
@@ -160,7 +160,24 @@ class RevoltParameters3DOF:
     lbx: npt.NDArray = field(default_factory=lambda: np.array([-INF, -INF, -pi, -1, -1, -pi/6]))
     ubx: npt.NDArray = field(default_factory=lambda: np.array([INF, INF, pi, knot_to_m_per_sec(3), 1, pi/6]))
 
-
+    
+    Xudot: float = -volume*RHO*0.0253
+    Yvdot: float = -volume*RHO*0.1802
+    Yrdot: float = -volume*RHO*0.0085 * loa
+    Nvdot: float = -volume*RHO*0.0099 * loa**2
+    
+    #Damping coef:
+    # Xu: float = - 0.102 * RHO * volume * GRAVITY / loa
+    # Yv: float = 1.212 * GRAVITY / loa
+    # Yr: float = 0.056 * RHO * volume * np.sqrt(GRAVITY * loa)
+    # Nv: float = 0.056 * RHO * volume * np.sqrt(GRAVITY * loa)
+    # Nr: float = 0.0601 * RHO * volume * np.sqrt(GRAVITY * loa)
+    Xu: float = -50.66
+    Yv: float = -601.45
+    Yr: float = -83.05
+    Nv: float = -83.10
+    Nr: float = -268.17
+    
     def __post_init__(self):
         """
         Compute derived parameters and matrices.
@@ -175,28 +192,23 @@ class RevoltParameters3DOF:
         self.proj_area_l: float = self.mean_height_above_water * self.loa
 
         # Basic calculations
-        self.Xudot, self.Yvdot, self.Yrdot, self.Nvdot = (-self.volume*RHO*np.array([0.0253, 0.1802, 0.0085 * self.loa, 0.0099 * self.loa**2])).tolist()
-        self.Xu, self.Yv, self.Yr, self.Nv, self.Nr = (-np.array([
-            0.102 * RHO * self.volume * GRAVITY / self.loa,
-            1.212 * GRAVITY / self.loa,
-            0.056 * RHO * self.volume * np.sqrt(GRAVITY * self.loa),
-            0.056 * RHO * self.volume * np.sqrt(GRAVITY * self.loa),
-            0.0601 * RHO * self.volume * np.sqrt(GRAVITY * self.loa)
-            ])).tolist()
+        
         self.Iz = self.m_tot / self.volume * self.volume_iz
-
+        # print("Hydro Dyn Parameters: ")
+        # print("Xudot: ", self.Xudot, " Yvdot: ", self.Yvdot, " Yrdot: ", self.Yrdot, " Nvdot: ", self.Nvdot)
+        # print("Xu: ", self.Xu, " Yv: ", self.Yv, " Yr: ", self.Yr, " Nv: ", self.Nv, " Nr: ", self.Nr)
         ## Inertia Matrix
-        MRB = np.array([
+        self.MRB = np.array([
             [self.m_tot, 0, 0],
             [0, self.m_tot, self.m_tot*self.rg[0]],
             [0, self.m_tot*self.rg[0], self.Iz]
         ])
-        MA = np.array([
+        self.MA = np.array([
             [-self.Xudot, 0, 0],
             [0, -self.Yvdot, -self.Yrdot],
             [0, -self.Yrdot, -self.Nvdot]
         ])
-        self.Minv = np.linalg.inv(MA + MRB)
+        self.Minv = np.linalg.inv(self.MA + self.MRB)
 
         ## Coriolis-Centripetal Matrix
         self.CRB = lambda nu : np.array([
@@ -209,32 +221,36 @@ class RevoltParameters3DOF:
             [0, 0, -self.Xudot * nu_r[0]],
             [-self.Yvdot * nu_r[1]-self.Yrdot * nu_r[2], self.Xudot * nu_r[0], 0]
         ])
-
+        #print("Revolt3 init=>RevoltParameters, rg: ", self.rg)
         ## Damping Matrix
-        # self.D = np.array([
-        #     [-self.Xu, 0, 0],
-        #     [0, -self.Yv, -self.Yr],
-        #     [0, -self.Nv, -self.Nr]
-        # ])
+        self.D = np.array([
+            [-self.Xu, 0, 0],
+            [0, -self.Yv, -self.Yr],
+            [0, -self.Nv, -self.Nr]
+        ])
         # For some reasons, the numerical values provided in https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2452115/16486_FULLTEXT.pdf (p.66)
         # does not match the given formula 
-        self.D = np.array([
-            [50.66, 0, 0],
-            [0, 601.45, 83.05],
-            [0, 83.10, 268.17]
-        ])
+        # self.D = np.array([
+        #     [50.66, 0, 0],
+        #     [0, 601.45, 83.05],
+        #     [0, 83.10, 268.17]
+        # ])
 
 class ReVolt3Dynamics(IDynamics):
-    actuators_params = RevoltThrusterParameters()
-    vessel_params = RevoltParameters3DOF()
+    #actuators_params = RevoltThrusterParameters()
+    #vessel_params = RevoltParameters3DOF()
 
     def __init__(
             self,
             dt: float,
             dp_mode: bool = True,
+            actuators_params: RevoltThrusterParameters = RevoltThrusterParameters(), #Passing actuator params as option, default is set to RevoltThrusterParameters()
+            vessel_params: RevoltParameters3DOF = RevoltParameters3DOF(),
             *args, 
             **kwargs
     ):
+        print("INSIDE ReVolt3Dynamics mass: ", vessel_params.m)
+        
         """
         ReVolt 3DOF dynamics model with azimuth thrusters.
         
@@ -250,6 +266,8 @@ class ReVolt3Dynamics(IDynamics):
         """
         nx, nu, np, nd = 18, 6, 6, 3 # states, commands, parameters, disturbances
         self.dp_mode = dp_mode
+        self.actuators_params = actuators_params #used in the continous_time_dynamics
+        self.vessel_params = vessel_params
         super().__init__(nx, nu, np, nd, dt, *args, **kwargs)
 
     def continuous_time_dynamics(self, x: cs.SX, u: cs.SX, theta: cs.SX, disturbance: cs.SX, *args, **kwargs) -> cs.SX:
@@ -285,6 +303,8 @@ class ReVolt3Dynamics(IDynamics):
         # Hull dynamics (body frame)
         Minv, C, D = self.vessel_params.Minv, self.vessel_params.CA(nu_3dofs) + self.vessel_params.CRB(nu_3dofs), self.vessel_params.D
         nu_dot_3dofs = Minv @ (tau_actuators + disturbance - C @ nu_3dofs - D @ nu_3dofs)
+        print("Core of the dynamics: ", self.vessel_params.rg)
+        print("core of the dynamics: ", self.vessel_params.MRB)
         x_dot[6] = nu_dot_3dofs[0]
         x_dot[7] = nu_dot_3dofs[1]
         x_dot[11] = nu_dot_3dofs[2]
@@ -303,8 +323,10 @@ class ReVolt3Dynamics(IDynamics):
 
 
 class ReVolt3(IVessel):
-    vessel_params = RevoltParameters3DOF()
-    actuator_params = RevoltThrusterParameters()
+    
+    #rg: npt.NDArray = field(default_factory=lambda: np.array([0.0, 0, 0.0], float)) 
+    
+
 
     def __init__(
             self,
@@ -314,6 +336,8 @@ class ReVolt3(IVessel):
             nu: Tuple = (0, 0, 0),
             thruster_speeds: Tuple = (0, 0, 0),
             azimuth_angles: Tuple = (0, 0, 0),
+            actuators_params: RevoltThrusterParameters = RevoltThrusterParameters(), #Passing actuator params as option, default is set to RevoltThrusterParameters()
+            vessel_params: RevoltParameters3DOF = RevoltParameters3DOF(),
             guidance: Optional[IGuidance] = None,
             navigation: Optional[INavigation] = None,
             control: Optional[IControl] = None,
@@ -335,11 +359,15 @@ class ReVolt3(IVessel):
         verbose_level:  Verbosity level for logging
         """
         self.dp_mode = dp_mode
-
+        self.vessel_params = vessel_params
+        self.actuator_params = actuators_params
+        
+        #print("vessel init, rg", self.vessel_params.rg)
+        #print("vessel init MRB: ", self.vessel_params.MRB) #should expect non zero on [2, 1]
         super().__init__(
             self.vessel_params.loa,
             self.vessel_params.beam,
-            ReVolt3Dynamics(dt, dp_mode=dp_mode),
+            ReVolt3Dynamics(dt, dp_mode=dp_mode, vessel_params=self.vessel_params, actuators_params=self.actuator_params),  
             states=(eta[0], eta[1], 0, 0, 0, eta[2], nu[0], nu[1], 0, 0, 0, nu[2], *azimuth_angles, *thruster_speeds),
             guidance=guidance,
             navigation=navigation,
@@ -395,6 +423,11 @@ class ReVolt3(IVessel):
 
         disturbance = tau_w + tau_c # Define it as a function of current, wind
         theta = theta if theta is not None else np.array(self.dynamics.nt * [1.0])
+        
+        #uncomment, to verify parameters, used with the actual dynamics.
+        #print("ReVolt3 __dynamics__ m: ", self.vessel_params.m)
+        #this should vary for different, parameters. 
+        #print(self.dynamics.vessel_params.m) #this is the mass that is used in the dynamics
         x = self.dynamics.fd(self.states, control_commands, theta, disturbance).flatten()
         return x
 
