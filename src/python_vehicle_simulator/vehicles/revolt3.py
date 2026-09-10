@@ -142,7 +142,9 @@ class RevoltParameters3DOF:
     cx: float = 0.5
     cy: float = 0.7
     cn: float = 0.08
-
+    proj_area_f: float = mean_height_above_water * beam
+    proj_area_l: float = mean_height_above_water * loa
+    
     R44: float = 0.36 * beam                             # radii of gyration (m)
     R55: float = 0.26 * loa
     R66: float = 0.26 * loa
@@ -161,11 +163,11 @@ class RevoltParameters3DOF:
     ubx: npt.NDArray = field(default_factory=lambda: np.array([INF, INF, pi, knot_to_m_per_sec(3), 1, pi/6]))
 
     
+    #Hydrodynamic parameters.    
     Xudot: float = -volume*RHO*0.0253
     Yvdot: float = -volume*RHO*0.1802
     Yrdot: float = -volume*RHO*0.0085 * loa
     Nvdot: float = -volume*RHO*0.0099 * loa**2
-    
     #Damping coef:
     # Xu: float = - 0.102 * RHO * volume * GRAVITY / loa
     # Yv: float = 1.212 * GRAVITY / loa
@@ -188,9 +190,7 @@ class RevoltParameters3DOF:
         self.m_tot = self.m + self.mp
         self.rg = (self.m * self.rg + self.mp * self.rp) / (self.m + self.mp) # corrected center of gravity with payload
 
-        self.proj_area_f: float = self.mean_height_above_water * self.beam
-        self.proj_area_l: float = self.mean_height_above_water * self.loa
-
+        
         # Basic calculations
         
         self.Iz = self.m_tot / self.volume * self.volume_iz
