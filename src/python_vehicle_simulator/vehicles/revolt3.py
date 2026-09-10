@@ -174,6 +174,7 @@ class RevoltParameters3DOF:
     # Yr: float = 0.056 * RHO * volume * np.sqrt(GRAVITY * loa)
     # Nv: float = 0.056 * RHO * volume * np.sqrt(GRAVITY * loa)
     # Nr: float = 0.0601 * RHO * volume * np.sqrt(GRAVITY * loa)
+    #
     Xu: float = -50.66
     Yv: float = -601.45
     Yr: float = -83.05
