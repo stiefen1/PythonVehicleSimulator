@@ -250,7 +250,7 @@ class ReVolt3Dynamics(IDynamics):
             *args, 
             **kwargs
     ):
-        print("INSIDE ReVolt3Dynamics mass: ", vessel_params.m)
+        #print("INSIDE ReVolt3Dynamics mass: ", vessel_params.m)
         
         """
         ReVolt 3DOF dynamics model with azimuth thrusters.
@@ -304,8 +304,8 @@ class ReVolt3Dynamics(IDynamics):
         # Hull dynamics (body frame)
         Minv, C, D = self.vessel_params.Minv, self.vessel_params.CA(nu_3dofs) + self.vessel_params.CRB(nu_3dofs), self.vessel_params.D
         nu_dot_3dofs = Minv @ (tau_actuators + disturbance - C @ nu_3dofs - D @ nu_3dofs)
-        print("Core of the dynamics: ", self.vessel_params.rg)
-        print("core of the dynamics: ", self.vessel_params.MRB)
+        #print("Core of the dynamics: ", self.vessel_params.rg)
+        #print("core of the dynamics: ", self.vessel_params.MRB)
         x_dot[6] = nu_dot_3dofs[0]
         x_dot[7] = nu_dot_3dofs[1]
         x_dot[11] = nu_dot_3dofs[2]
