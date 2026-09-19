@@ -350,7 +350,7 @@ class ReVolt3(IVessel):
             verbose_level=verbose_level,
         )
     
-    def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> np.ndarray:
+    def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, external_force: Optional[npt.NDArray] = None, **kwargs) -> np.ndarray:
         """
         Vessel dynamics step with environmental disturbances.
         
@@ -394,6 +394,18 @@ class ReVolt3(IVessel):
         tau_c = tau_c_coriolis + tau_c_damping
 
         disturbance = tau_w + tau_c # Define it as a function of current, wind
+        
+        if external_force is not None:
+            external_force = np.asarray(external_force)
+            
+            if external_force.shape != (3,):
+                raise ValueError("external_force must have shape (3,)")
+            
+            if not np.all(np.isfinite(external_force)):
+                raise ValueError("external_force must contain finite values")
+            
+            disturbance = tau_w + tau_c + external_force
+        
         theta = theta if theta is not None else np.array(self.dynamics.nt * [1.0])
         x = self.dynamics.fd(self.states, control_commands, theta, disturbance).flatten()
         return x

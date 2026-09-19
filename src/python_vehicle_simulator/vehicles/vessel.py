@@ -77,6 +77,7 @@ class IVessel(IDrawable):
             *args,
             control_commands: Optional[npt.NDArray] = None,
             theta: Optional[npt.NDArray] = None,
+            external_force: Optional[npt.NDArray] = None,
             **kwargs
         ) -> Tuple[np.ndarray, float, bool, bool, Dict, bool]:
         """
@@ -109,7 +110,7 @@ class IVessel(IDrawable):
             self.control.prev['u'] = control_commands # type: ignore
 
         ## USV Dynamics
-        self.states = self.__dynamics__(control_commands, current, wind, theta=theta)
+        self.states = self.__dynamics__(control_commands, current, wind, theta=theta, external_force=external_force)
 
         return (self.states, 0, guidance_info['term'], False, {}, False)
     
