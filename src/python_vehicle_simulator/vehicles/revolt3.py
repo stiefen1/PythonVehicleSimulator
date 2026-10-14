@@ -284,7 +284,7 @@ class ReVolt3Dynamics(IDynamics):
 
         # Hull dynamics (body frame)
         Minv, C, D = self.vessel_params.Minv, self.vessel_params.CA(nu_3dofs) + self.vessel_params.CRB(nu_3dofs), self.vessel_params.D
-        nu_dot_3dofs = Minv @ (tau_actuators + disturbance - C @ nu_3dofs - D @ nu_3dofs)
+        nu_dot_3dofs = Minv @ (tau_actuators + disturbance - C @ nu_3dofs - D @ nu_3dofs) # Assumption 8.150; straight-line path
         x_dot[6] = nu_dot_3dofs[0]
         x_dot[7] = nu_dot_3dofs[1]
         x_dot[11] = nu_dot_3dofs[2]
@@ -404,7 +404,7 @@ class ReVolt3(IVessel):
             U: npt.NDArray,
             theta: Optional[npt.NDArray] = None,
             disturbance: Optional[npt.NDArray] = None,
-                method: Literal['loop', 'mapaccum'] = 'loop',
+            method: Literal['loop', 'mapaccum'] = 'loop',
     ) -> npt.NDArray:
         """
         Fast batched dynamics rollout for sampling-based planning and dataset generation.
