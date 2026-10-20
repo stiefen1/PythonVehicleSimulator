@@ -153,6 +153,7 @@ class RevoltParameters3DOF:
     ## Mass & Payload
     m: float = 157.0                                    # Mass (kg) from https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2452115/16486_FULLTEXT.pdf (p.63)
     mp: float = 100.0                                   # Payload mass (kg)
+    damping_scale: float = 1.0
     rg: npt.NDArray = field(default_factory=lambda: np.array([0.0, 0, 0.0], float))  
     rp: npt.NDArray = field(default_factory=lambda: np.array([0.0, 0, 0.0], float))          # Location of payload (m)
 
@@ -218,7 +219,7 @@ class RevoltParameters3DOF:
         # ])
         # For some reasons, the numerical values provided in https://ntnuopen.ntnu.no/ntnu-xmlui/bitstream/handle/11250/2452115/16486_FULLTEXT.pdf (p.66)
         # does not match the given formula 
-        self.D = np.array([
+        self.D = self.damping_scale * np.array([
             [50.66, 0, 0],
             [0, 601.45, 83.05],
             [0, 83.10, 268.17]
@@ -232,6 +233,7 @@ class ReVolt3Dynamics(IDynamics):
             self,
             dt: float,
             dp_mode: bool = True,
+            vessel_params: Optional[RevoltParameters3DOF] = None,
             *args, 
             **kwargs
     ):
@@ -250,6 +252,7 @@ class ReVolt3Dynamics(IDynamics):
         """
         nx, nu, np, nd = 18, 6, 6, 3 # states, commands, parameters, disturbances
         self.dp_mode = dp_mode
+        self.vessel_params = vessel_params or RevoltParameters3DOF()
         super().__init__(nx, nu, np, nd, dt, *args, **kwargs)
 
     def continuous_time_dynamics(self, x: cs.SX, u: cs.SX, theta: cs.SX, disturbance: cs.SX, *args, **kwargs) -> cs.SX:
@@ -310,6 +313,7 @@ class ReVolt3(IVessel):
             self,
             dt: float,
             dp_mode: bool = True,
+            vessel_params: Optional[RevoltParameters3DOF] = None,
             eta: Tuple = (0, 0, 0),
             nu: Tuple = (0, 0, 0),
             thruster_speeds: Tuple = (0, 0, 0),
@@ -335,11 +339,12 @@ class ReVolt3(IVessel):
         verbose_level:  Verbosity level for logging
         """
         self.dp_mode = dp_mode
+        self.vessel_params = vessel_params or RevoltParameters3DOF()
 
         super().__init__(
             self.vessel_params.loa,
             self.vessel_params.beam,
-            ReVolt3Dynamics(dt, dp_mode=dp_mode),
+            ReVolt3Dynamics(dt, dp_mode=dp_mode, vessel_params=vessel_params),
             states=(eta[0], eta[1], 0, 0, 0, eta[2], nu[0], nu[1], 0, 0, 0, nu[2], *azimuth_angles, *thruster_speeds),
             guidance=guidance,
             navigation=navigation,
