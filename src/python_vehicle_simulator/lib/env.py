@@ -72,7 +72,8 @@ class NavEnv:
         """
         # Step target vessels
         for tv in self.target_vessels:
-            target_vessels = self.target_vessels.copy().remove(tv)
+            target_vessels = self.target_vessels.copy()
+            target_vessels.remove(tv)
             tv.step(self.current, self.wind, self.obstacles, target_vessels+[self.own_vessel], *args, **kwargs)
 
         # Step own vessel
