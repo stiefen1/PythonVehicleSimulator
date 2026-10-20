@@ -72,6 +72,10 @@ class RevoltThrusterParameters:
     Aggregates parameters for all thrusters (2 stern + 1 bow)
     and provides thrust allocation matrix for force/torque computation.
     """
+    port: RevoltSternThrusterParams = field(default_factory=lambda: RevoltSternThrusterParams())
+    starboard: RevoltSternThrusterParams = field(default_factory=lambda: RevoltSternThrusterParams())
+    bow: RevoltBowThrusterParams = field(default_factory=lambda: RevoltBowThrusterParams())
+
     ## Propellers       
     thrusters: List = field(init=False)                         
     k_pos: npt.NDArray = field(init=False)                       # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
@@ -92,7 +96,7 @@ class RevoltThrusterParameters:
         Creates arrays for all thruster parameters and defines
         the thrust allocation matrix T for force/torque computation.
         """
-        self.thrusters = [RevoltSternThrusterParams(), RevoltSternThrusterParams(), RevoltBowThrusterParams()]  
+        self.thrusters = [self.port, self.starboard, self.bow]  
         self.k_pos: npt.NDArray = np.array([thruster.k_pos for thruster in self.thrusters])      # Positive Bollard, one propeller -> f_i = k_pos * n_i * |n_i| if n_i>0 else k_neg * n_i * |n_i|
         self.k_neg: npt.NDArray = np.array([thruster.k_neg for thruster in self.thrusters])      # Negative Bollard, one propeller
         self.f_max: npt.NDArray = np.array([thruster.f_max for thruster in self.thrusters])      # Max positive force, one propeller
@@ -225,14 +229,16 @@ class RevoltParameters3DOF:
         ])
 
 class ReVolt3Dynamics(IDynamics):
-    actuators_params = RevoltThrusterParameters()
-    vessel_params = RevoltParameters3DOF()
+    actuators_params: RevoltThrusterParameters
+    vessel_params: RevoltParameters3DOF
 
     def __init__(
             self,
             dt: float,
             dp_mode: bool = True,
             *args, 
+            actuators_params: Optional[RevoltThrusterParameters] = None,
+            vessel_params: Optional[RevoltParameters3DOF] = None,
             **kwargs
     ):
         """
@@ -250,6 +256,8 @@ class ReVolt3Dynamics(IDynamics):
         """
         nx, nu, np, nd = 18, 6, 6, 3 # states, commands, parameters, disturbances
         self.dp_mode = dp_mode
+        self.actuators_params = RevoltThrusterParameters() if actuators_params is None else actuators_params
+        self.vessel_params = RevoltParameters3DOF() if vessel_params is None else vessel_params
         super().__init__(nx, nu, np, nd, dt, *args, **kwargs)
 
     def continuous_time_dynamics(self, x: cs.SX, u: cs.SX, theta: cs.SX, disturbance: cs.SX, *args, **kwargs) -> cs.SX:
@@ -303,8 +311,8 @@ class ReVolt3Dynamics(IDynamics):
 
 
 class ReVolt3(IVessel):
-    vessel_params = RevoltParameters3DOF()
-    actuator_params = RevoltThrusterParameters()
+    vessel_params: RevoltParameters3DOF
+    actuator_params: RevoltThrusterParameters
 
     def __init__(
             self,
@@ -319,7 +327,9 @@ class ReVolt3(IVessel):
             control: Optional[IControl] = None,
             diagnosis: Optional[IDiagnosis] = None,
             mmsi: Optional[str] = None,
-            verbose_level: int = 0
+            verbose_level: int = 0,
+            vessel_params: Optional[RevoltParameters3DOF] = None,
+            actuator_params: Optional[RevoltThrusterParameters] = None
     ):
         """
         ReVolt autonomous surface vessel with 3DOF dynamics.
@@ -335,11 +345,13 @@ class ReVolt3(IVessel):
         verbose_level:  Verbosity level for logging
         """
         self.dp_mode = dp_mode
+        self.vessel_params = RevoltParameters3DOF() if vessel_params is None else vessel_params
+        self.actuator_params = RevoltThrusterParameters() if actuator_params is None else actuator_params
 
         super().__init__(
             self.vessel_params.loa,
             self.vessel_params.beam,
-            ReVolt3Dynamics(dt, dp_mode=dp_mode),
+            ReVolt3Dynamics(dt, dp_mode=dp_mode, actuators_params=self.actuator_params, vessel_params=self.vessel_params),
             states=(eta[0], eta[1], 0, 0, 0, eta[2], nu[0], nu[1], 0, 0, 0, nu[2], *azimuth_angles, *thruster_speeds),
             guidance=guidance,
             navigation=navigation,
