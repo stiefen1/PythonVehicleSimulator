@@ -61,6 +61,7 @@ class IVessel(IDrawable):
         self.name = name
         self.mmsi = mmsi
 
+
     @abstractmethod
     def __dynamics__(self, control_commands:npt.NDArray, current:Current, wind:Wind, *args, theta: Optional[npt.NDArray] = None, **kwargs) -> np.ndarray:
         disturbance = np.array([0, 0, 0]) # Define it as a function of current, wind
@@ -94,6 +95,8 @@ class IVessel(IDrawable):
         # GNC
         ## Navigation: measure environments
         measurements, navigation_info = self.navigation(self.states, current, wind, obstacles, target_vessels, *args, control_commands=self.control.prev['u'], **kwargs)
+        # Yanking the measurement to such that it is available to the ReVolt class
+        self.measurements = measurements
         
         ## Fault Diagnosis
         diagnosis, diagnosis_info = self.diagnosis(*args, **measurements, **navigation_info, control_commands=self.control.prev['u'], **kwargs)
@@ -110,7 +113,7 @@ class IVessel(IDrawable):
 
         ## USV Dynamics
         self.states = self.__dynamics__(control_commands, current, wind, theta=theta)
-
+        
         return (self.states, 0, guidance_info['term'], False, {}, False)
     
     def reset(

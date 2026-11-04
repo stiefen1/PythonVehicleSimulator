@@ -61,6 +61,7 @@ class ThrusterDynamics(IDynamics):
         out = cs.SX.zeros(self.nx) # type: ignore
         out[0] = (u - x[0]) / self.time_constant
         out[1] =  2 * theta * self.thrust_coeff * out[0]
+        print("Thruster dynamics coeff ", self.thrust_coeff)
         return out
 
 

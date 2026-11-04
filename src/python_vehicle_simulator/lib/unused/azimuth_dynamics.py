@@ -47,4 +47,5 @@ class AzimuthThruster(IDynamics):
         theta:          effectiveness               (np,)
         disturbance:    None                        (nd,)
         """
+        print("Azimuth time c. ", self.time_constant)
         return (u - x) / self.time_constant

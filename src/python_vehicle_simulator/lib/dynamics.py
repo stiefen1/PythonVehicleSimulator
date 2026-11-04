@@ -50,7 +50,6 @@ class IDynamics(ABC):
         u = cs.SX.sym('u', self.nu)                     # type: ignore
         theta = cs.SX.sym('theta', self.nt)             # type: ignore
         disturbance = cs.SX.sym('disturbance', self.nd) # type: ignore
-
         return cs.Function('continuous_time_dynamics', [x, u, theta, disturbance], [self.continuous_time_dynamics(x, u, theta, disturbance)])
 
     def _discretize_dynamics(self, continuous_time_dynamics: cs.Function, method: DiscretizationMethod='rk4') -> cs.Function:
@@ -144,6 +143,7 @@ class IDynamics(ABC):
         self._A_function, self._B_function, self._Ad_function, self._Bd_function = self._get_linearized_models()
         self._fd_batch_cache = {}
         self._rollout_mapaccum_cache = {}
+
 
     def _get_fd_batch_function(self, batch_size: int) -> cs.Function:
         """
