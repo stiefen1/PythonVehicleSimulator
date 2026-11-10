@@ -52,6 +52,7 @@ class NMPCBase(IControl):
         self.nu = int(nu)
         self.ntheta = int(ntheta)
         self.ndisturbance = int(ndisturbance)
+        self.n_uvr_rel = 3
 
         self.u_lb = np.asarray(u_lb, dtype=float).reshape(-1)
         self.u_ub = np.asarray(u_ub, dtype=float).reshape(-1)
@@ -86,7 +87,7 @@ class NMPCBase(IControl):
             raise ValueError(f"Unsupported solver '{solver}'")
 
         n_ref = self.nx * (self.horizon + 1)
-        n_runtime = self.ntheta + self.ndisturbance
+        n_runtime = self.ntheta + self.ndisturbance + self.n_uvr_rel
 
         self.X = cs.SX.sym("X", self.nx, self.horizon + 1)  # type: ignore[arg-type]
         self.U = cs.SX.sym("U", self.nu, self.horizon)  # type: ignore[arg-type]
@@ -97,10 +98,11 @@ class NMPCBase(IControl):
         theta_start = self.nx + n_ref
         theta = self.P[theta_start:theta_start + self.ntheta]
         disturbance = self.P[theta_start + self.ntheta:theta_start + self.ntheta + self.ndisturbance]
+        uvr_rel = self.P[theta_start + self.ntheta + self.ndisturbance:theta_start + self.ntheta + self.ndisturbance + self.n_uvr_rel]
 
         g = [self.X[:, 0] - x0]
         for k in range(self.horizon):
-            x_next = self.dynamics(self.X[:, k], self.U[:, k], theta, disturbance)
+            x_next = self.dynamics(self.X[:, k], self.U[:, k], theta, disturbance, uvr_rel)
             g.append(self.X[:, k + 1] - x_next)
         self.g = cs.vertcat(*g)
 
@@ -177,6 +179,9 @@ class NMPCBase(IControl):
         if x0.shape[0] != self.nx:
             raise ValueError(f"states must have size {self.nx}")
 
+        uvr = np.take(states, [6, 7, 11])
+        uvr_current_in_ship_frame = np.zeros((3,)) # initialize array
+
         # compute disturbance, either based on vessel parameters or take it from **kwargs
         if self.vessel_params is not None: 
             # Wind perturbations
@@ -200,10 +205,9 @@ class NMPCBase(IControl):
             ]) 
 
             # Current perturbations
-            uvr = np.take(states, [6, 7, 11])
-            v_c = np.array([current.u(states[5]), current.v(states[5]), 0]) # current speed in ship frame
-            tau_c_coriolis = self.vessel_params.CA(uvr) @ uvr - self.vessel_params.CA(uvr - v_c) @ (uvr - v_c) # cancel CA(nu) @ nu and add CA(nu_r) @ nu_r
-            tau_c_damping = self.vessel_params.D @ v_c
+            uvr_current_in_ship_frame = np.array([current.u(states[5]), current.v(states[5]), 0]) # current speed in ship frame
+            tau_c_coriolis = self.vessel_params.CA(uvr) @ uvr - self.vessel_params.CA(uvr - uvr_current_in_ship_frame) @ (uvr - uvr_current_in_ship_frame) # cancel CA(nu) @ nu and add CA(nu_r) @ nu_r
+            tau_c_damping = self.vessel_params.D @ uvr_current_in_ship_frame
             tau_c = tau_c_coriolis + tau_c_damping
 
             disturbance = tau_w + tau_c # Define it as a function of current, wind
@@ -217,7 +221,7 @@ class NMPCBase(IControl):
             raise ValueError(f"disturbance must have size {self.ndisturbance}")
 
         ref = self._build_reference_matrix(states_des)
-        p = np.concatenate([x0, ref.reshape(-1, order="F"), theta, disturbance])
+        p = np.concatenate([x0, ref.reshape(-1, order="F"), theta, disturbance, uvr - uvr_current_in_ship_frame])
         x_guess = self._build_initial_guess(x0)
 
         solver_in = {

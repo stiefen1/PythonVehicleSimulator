@@ -189,7 +189,7 @@ class IDynamics(ABC):
         self._rollout_mapaccum_cache[key] = step_function.mapaccum(horizon)
         return self._rollout_mapaccum_cache[key]
 
-    def A(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
+    def A(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray, *args) -> npt.NDArray:
         """
         Continuous-time state matrix (∂f/∂x).
         
@@ -201,9 +201,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: State matrix A (nx, nx)
         """
-        return np.array(self._A_function(x, u, theta, disturbance, *args))
+        return np.array(self._A_function(x, u, theta, disturbance, uvr_rel, *args))
     
-    def B(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
+    def B(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray, *args) -> npt.NDArray:
         """
         Continuous-time input matrix (∂f/∂u).
         
@@ -215,9 +215,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Input matrix B (nx, nu)
         """
-        return np.array(self._B_function(x, u, theta, disturbance, *args))
+        return np.array(self._B_function(x, u, theta, disturbance, uvr_rel, *args))
     
-    def Ad(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
+    def Ad(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray, *args) -> npt.NDArray:
         """
         Discrete-time state matrix (∂fd/∂x).
         
@@ -229,9 +229,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Discrete state matrix Ad (nx, nx)
         """
-        return np.array(self._Ad_function(x, u, theta, disturbance, *args))
+        return np.array(self._Ad_function(x, u, theta, disturbance, uvr_rel, *args))
     
-    def Bd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
+    def Bd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray, *args) -> npt.NDArray:
         """
         Discrete-time input matrix (∂fd/∂u).
         
@@ -243,9 +243,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Discrete input matrix Bd (nx, nu)
         """
-        return np.array(self._Bd_function(x, u, theta, disturbance, *args))
+        return np.array(self._Bd_function(x, u, theta, disturbance, uvr_rel, *args))
     
-    def f(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
+    def f(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray, *args) -> npt.NDArray:
         """
         Continuous-time dynamics function.
         
@@ -257,9 +257,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: State derivatives dx/dt (nx,)
         """
-        return np.array(self._f(x, u, theta, disturbance, *args))
+        return np.array(self._f(x, u, theta, disturbance, uvr_rel, *args))
     
-    def fd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, *args) -> npt.NDArray:
+    def fd(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray, *args) -> npt.NDArray:
         """
         Discrete-time dynamics function.
         
@@ -271,9 +271,9 @@ class IDynamics(ABC):
         Returns:
             npt.NDArray: Next states x[k+1] (nx,)
         """
-        return np.array(self._fd(x, u, theta, disturbance, *args))
+        return np.array(self._fd(x, u, theta, disturbance, uvr_rel, *args))
 
-    def fd_batch(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def fd_batch(self, x: npt.NDArray, u: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray) -> npt.NDArray:
         """
         Batched discrete-time dynamics with public shape (N, *).
 
@@ -289,23 +289,25 @@ class IDynamics(ABC):
         u = np.asarray(u)
         theta = np.asarray(theta)
         disturbance = np.asarray(disturbance)
+        uvr_rel = np.asarray(uvr_rel)
 
         assert x.ndim == 2 and x.shape[1] == self.nx, f"x must have shape (N, {self.nx})"
         assert u.ndim == 2 and u.shape[1] == self.nu, f"u must have shape (N, {self.nu})"
         assert theta.ndim == 2 and theta.shape[1] == self.nt, f"theta must have shape (N, {self.nt})"
         assert disturbance.ndim == 2 and disturbance.shape[1] == self.nd, f"disturbance must have shape (N, {self.nd})"
+        assert uvr_rel.ndim == 2 and uvr_rel.shape[1] == self.nd, f"uvr_rel must have shape (N, {self.nd})"
 
         N = x.shape[0]
         assert N > 0, "batch size N must be > 0"
-        assert u.shape[0] == N and theta.shape[0] == N and disturbance.shape[0] == N, "all inputs must share the same batch size N"
+        assert u.shape[0] == N and theta.shape[0] == N and disturbance.shape[0] == N and uvr_rel.shape[0] == N, "all inputs must share the same batch size N"
 
         fd_batch_function = self._get_fd_batch_function(N)
 
         # CasADi mapped functions operate on column-wise batches: (dim, N)
-        x_next = np.array(fd_batch_function(x.T, u.T, theta.T, disturbance.T))
+        x_next = np.array(fd_batch_function(x.T, u.T, theta.T, disturbance.T, uvr_rel.T))
         return x_next.T
 
-    def _rollout_batch_loop_fast(self, x0: npt.NDArray, U: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def _rollout_batch_loop_fast(self, x0: npt.NDArray, U: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray) -> npt.NDArray:
         """
         Fast rollout path using a Python time loop but minimizing per-step overhead.
         """
@@ -319,17 +321,18 @@ class IDynamics(ABC):
         U_col = np.transpose(U, (1, 0, 2))
         theta_col = theta.T
         disturbance_col = disturbance.T
+        uvr_rel_col = uvr_rel.T
 
         X_col = np.empty((self.nx, N, T + 1), dtype=x0.dtype)
         X_col[:, :, 0] = xk
 
         for k in range(T):
-            xk = np.array(fd_batch_function(xk, U_col[:, :, k], theta_col, disturbance_col))
+            xk = np.array(fd_batch_function(xk, U_col[:, :, k], theta_col, disturbance_col, uvr_rel_col))
             X_col[:, :, k + 1] = xk
 
         return np.transpose(X_col, (1, 0, 2))
 
-    def _rollout_batch_mapaccum_fast(self, x0: npt.NDArray, U: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray) -> npt.NDArray:
+    def _rollout_batch_mapaccum_fast(self, x0: npt.NDArray, U: npt.NDArray, theta: npt.NDArray, disturbance: npt.NDArray, uvr_rel: npt.NDArray) -> npt.NDArray:
         """
         Fast rollout path using CasADi mapaccum over the horizon.
         """
@@ -344,7 +347,8 @@ class IDynamics(ABC):
 
         theta_col = np.tile(theta.T.reshape(self.nt * N, 1, order='F'), (1, T))
         disturbance_col = np.tile(disturbance.T.reshape(self.nd * N, 1, order='F'), (1, T))
-        W = np.vstack((U_col, theta_col, disturbance_col))
+        uvr_rel_col = np.tile(uvr_rel.T.reshape(self.nd * N, 1, order='F'), (1, T))
+        W = np.vstack((U_col, theta_col, disturbance_col, uvr_rel_col))
 
         x0_flat = x0.T.reshape(self.nx * N, 1, order='F')
         Xk = np.array(rollout_function(x0_flat, W))
@@ -361,6 +365,7 @@ class IDynamics(ABC):
             U: npt.NDArray,
             theta: npt.NDArray,
             disturbance: npt.NDArray,
+            uvr_rel: npt.NDArray,
             method: Literal['loop', 'mapaccum'] = 'loop'
     ) -> npt.NDArray:
         """
@@ -378,21 +383,23 @@ class IDynamics(ABC):
         U = np.asarray(U)
         theta = np.asarray(theta)
         disturbance = np.asarray(disturbance)
+        uvr_rel = np.asarray(uvr_rel)
 
         assert x0.ndim == 2 and x0.shape[1] == self.nx, f"x0 must have shape (N, {self.nx})"
         assert U.ndim == 3 and U.shape[1] == self.nu, f"U must have shape (N, {self.nu}, T)"
         assert theta.ndim == 2 and theta.shape[1] == self.nt, f"theta must have shape (N, {self.nt})"
         assert disturbance.ndim == 2 and disturbance.shape[1] == self.nd, f"disturbance must have shape (N, {self.nd})"
+        assert uvr_rel.ndim == 2 and uvr_rel.shape[1] == self.nd, f"uvr_rel must have shape (N, {self.nd})"
 
         N = x0.shape[0]
         T = U.shape[2]
         assert N > 0, "batch size N must be > 0"
-        assert U.shape[0] == N and theta.shape[0] == N and disturbance.shape[0] == N, "all inputs must share the same batch size N"
+        assert U.shape[0] == N and theta.shape[0] == N and disturbance.shape[0] == N and uvr_rel.shape[0] == N, "all inputs must share the same batch size N"
         assert method in get_args(Literal['loop', 'mapaccum']), "method must be 'loop' or 'mapaccum'"
 
         if method == 'mapaccum':
-            return self._rollout_batch_mapaccum_fast(x0, U, theta, disturbance)
-        return self._rollout_batch_loop_fast(x0, U, theta, disturbance)
+            return self._rollout_batch_mapaccum_fast(x0, U, theta, disturbance, uvr_rel)
+        return self._rollout_batch_loop_fast(x0, U, theta, disturbance, uvr_rel)
 
     
 if __name__ == "__main__":

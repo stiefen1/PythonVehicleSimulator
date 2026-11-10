@@ -111,6 +111,9 @@ class IExtendedKalmanFilter(ABC):
         return np.eye(x.shape[0])
     
     def predict(self, u:np.ndarray, wind:Wind, current:Current, theta:Optional[np.ndarray]=None) -> np.ndarray:
+        uvr = np.take(self.x, [6, 7, 11])
+        uvr_current_in_ship_frame = np.zeros((3,))
+        
         if self.vessel_params is not None:    
             # Wind perturbations
             uw = wind.u(self.x[5])
@@ -133,18 +136,17 @@ class IExtendedKalmanFilter(ABC):
             ]) 
 
             # Current perturbations
-            uvr = np.take(self.x, [6, 7, 11])
-            v_c = np.array([current.u(self.x[5]), current.v(self.x[5]), 0]) # current speed in ship frame
-            tau_c_coriolis = self.vessel_params.CA(uvr) @ uvr - self.vessel_params.CA(uvr - v_c) @ (uvr - v_c) # cancel CA(nu) @ nu and add CA(nu_r) @ nu_r
-            tau_c_damping = self.vessel_params.D @ v_c
+            uvr_current_in_ship_frame = np.array([current.u(self.x[5]), current.v(self.x[5]), 0]) # current speed in ship frame
+            tau_c_coriolis = self.vessel_params.CA(uvr) @ uvr - self.vessel_params.CA(uvr - uvr_current_in_ship_frame) @ (uvr - uvr_current_in_ship_frame) # cancel CA(nu) @ nu and add CA(nu_r) @ nu_r
+            tau_c_damping = self.vessel_params.D @ uvr_current_in_ship_frame
             tau_c = tau_c_coriolis + tau_c_damping
             disturbance = tau_c + tau_w
         else:
             disturbance = np.array(3*[0.0])
             
-        dFdx = self.dfdx(self.x, u, theta=theta, disturbance=disturbance)
+        dFdx = self.dfdx(self.x, u, disturbance=disturbance, uvr_rel=uvr-uvr_current_in_ship_frame, theta=theta)
         self.P = dFdx @ self.P @ dFdx.T + self.Q
-        self.x = self.f(self.x, u, theta=theta, disturbance=disturbance)
+        self.x = self.f(self.x, u, disturbance=disturbance, uvr_rel=uvr-uvr_current_in_ship_frame, theta=theta)
         return self.x
     
     def update(self, z:np.ndarray) -> np.ndarray:
