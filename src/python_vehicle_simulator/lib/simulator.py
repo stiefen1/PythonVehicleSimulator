@@ -41,10 +41,12 @@ class Simulator:
             }
         }
 
-    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: datetime.datetime = datetime.datetime.now(), seed: Optional[int] = None, use_tqdm: bool = True, **kwargs) -> None:
+    def run(self, tf:float, *args, render:bool=False, store_data:bool=True, savefig_every: Optional[int] = None, t0: Optional[datetime.datetime] = None, seed: Optional[int] = None, use_tqdm: bool = True, **kwargs) -> None:
         """
         Run simulation from 0 to tf with sampling time self.dt
         """
+        if t0 is None:
+            t0 = datetime.datetime.now(datetime.timezone.utc)
         self.env.reset(seed=seed)
         print("Running simulation..")
         N = int(tf//self.dt) + 1
@@ -99,7 +101,8 @@ class Simulator:
         # Store own vessel state (eta and nu)
         own_vessel_state = {
             'eta': deepcopy(self.env.own_vessel.eta),
-            'nu': deepcopy(self.env.own_vessel.nu)
+            'nu': deepcopy(self.env.own_vessel.nu),
+            'actuators': deepcopy(self.env.own_vessel.states[12:-1]) if self.env.own_vessel.states.shape[0] > 12 else None
         }
         self.simulation_data['own_vessel_states'].append(own_vessel_state)
         
@@ -1121,4 +1124,3 @@ class Simulator:
         print(f"Total frames: {total_frames}, Duration: {total_frames/fps:.1f} seconds, Trail length: {trail_length}")
         
         return output_file
-
